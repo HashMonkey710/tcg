@@ -1,0 +1,292 @@
+# MTG Arena Clone - Technical Requirements Document
+
+## 1. Project Overview
+
+**Project Name**: MTG Arena Clone  
+**Development Timeline**: 15 weeks (5 phases)  
+**Target**: Production-ready MTG deck building and collection management app with Discord-style UI  
+**Platform**: Flutter (iOS, Android, potential desktop/web)
+
+## 2. Technical Requirements
+
+### 2.1 Performance Requirements
+- **Database Performance**: Sub-3ms queries on 25,000+ card dataset
+- **UI Performance**: Maintain 60fps during card browsing and deck building
+- **Memory Management**: Efficient image caching with memory limits
+- **Load Times**: App startup < 3 seconds, card search results < 500ms
+
+### 2.2 Data Requirements
+- **Card Database**: 25,000+ Magic: The Gathering cards from Scryfall API
+- **Offline Support**: Full functionality without internet connection
+- **Data Sync**: Daily incremental updates from Scryfall bulk data
+- **Storage Optimization**: Efficient local storage for cards, images, and user data
+
+### 2.3 UI/UX Requirements
+- **Discord Design System**: Exact color matching (#5865F2, #323339, etc.)
+- **Responsive Layout**: 3-column desktop, adaptive mobile
+- **Accessibility**: WCAG 2.2 compliance
+- **Card Recognition**: OCR functionality for physical card scanning
+
+### 2.4 Functional Requirements
+- **Deck Building**: Support for multiple MTG formats (Standard, Modern, Commander)
+- **Collection Management**: Track owned cards, organize collections
+- **Search & Filter**: Advanced card search with multiple criteria
+- **Real-time Features**: Deck sharing, collaborative building (Phase 4)
+- **Social Features**: User profiles, deck rating, community features (Phase 4)
+
+## 3. Architecture Decisions
+
+### 3.1 State Management: BLoC Pattern
+**Decision**: Use flutter_bloc for state management  
+**Rationale**: 
+- Excellent for complex business logic (MTG rules, deck validation)
+- Strong separation of concerns
+- Enhanced debugging tools in 2025
+- Team scalability for 15-week timeline
+- Predictable state transitions for game logic
+
+### 3.2 Database: SQLite with Optimization
+**Decision**: SQLite with sqflite_common_ffi and WAL mode  
+**Rationale**:
+- Proven performance with 25k+ records
+- Offline-first requirement
+- ACID compliance for data integrity
+- Optimized with proper indexing strategy
+
+### 3.3 Architecture Pattern: Clean Architecture
+**Layers**:
+- **Presentation**: BLoC + UI components
+- **Domain**: Business logic, use cases, entities
+- **Data**: Repositories, data sources, models
+
+### 3.4 Dependency Injection: GetIt
+**Decision**: Use GetIt for service location  
+**Rationale**:
+- Works seamlessly with BLoC
+- Testable architecture
+- Performance benefits over Provider for complex apps
+
+## 4. External Dependencies
+
+### 4.1 Scryfall API Integration
+- **Rate Limiting**: 10 requests/second maximum
+- **Bulk Data**: Daily downloads for initial population
+- **Compliance**: No paywalling, preserve copyright/artist information
+- **Headers**: Proper User-Agent and Accept headers required
+
+### 4.2 Core Flutter Packages
+```yaml
+dependencies:
+  flutter_bloc: ^8.1.3
+  get_it: ^7.6.4
+  sqflite_common_ffi: ^2.3.0+4
+  http: ^1.1.0
+  cached_network_image: ^3.3.0
+  path_provider: ^2.1.1
+  json_annotation: ^4.8.1
+  equatable: ^2.0.5
+  dartz: ^0.10.1
+
+dev_dependencies:
+  flutter_test:
+  build_runner: ^2.4.7
+  json_serializable: ^6.7.1
+  bloc_test: ^9.1.5
+  mockito: ^5.4.2
+```
+
+## 5. Database Schema Design
+
+### 5.1 Core Tables
+```sql
+-- Cards table with optimized indexing
+CREATE TABLE cards (
+  id TEXT PRIMARY KEY,
+  oracle_id TEXT,
+  name TEXT NOT NULL,
+  mana_cost TEXT,
+  cmc REAL,
+  type_line TEXT,
+  oracle_text TEXT,
+  power TEXT,
+  toughness TEXT,
+  colors TEXT, -- JSON array
+  color_identity TEXT, -- JSON array
+  keywords TEXT, -- JSON array
+  set_code TEXT,
+  set_name TEXT,
+  collector_number TEXT,
+  rarity TEXT,
+  artist TEXT,
+  image_uris TEXT, -- JSON object
+  prices TEXT, -- JSON object
+  legalities TEXT, -- JSON object
+  created_at INTEGER,
+  updated_at INTEGER
+);
+
+-- Optimized indexes for performance
+CREATE INDEX idx_cards_name ON cards(name);
+CREATE INDEX idx_cards_type_line ON cards(type_line);
+CREATE INDEX idx_cards_colors ON cards(colors);
+CREATE INDEX idx_cards_cmc ON cards(cmc);
+CREATE INDEX idx_cards_set_code ON cards(set_code);
+CREATE INDEX idx_cards_rarity ON cards(rarity);
+CREATE UNIQUE INDEX idx_cards_oracle_id ON cards(oracle_id);
+
+-- User collections
+CREATE TABLE collections (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  description TEXT,
+  created_at INTEGER,
+  updated_at INTEGER
+);
+
+-- Collection cards (many-to-many)
+CREATE TABLE collection_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  collection_id INTEGER,
+  card_id TEXT,
+  quantity INTEGER DEFAULT 1,
+  condition TEXT DEFAULT 'NM',
+  foil BOOLEAN DEFAULT FALSE,
+  FOREIGN KEY (collection_id) REFERENCES collections(id),
+  FOREIGN KEY (card_id) REFERENCES cards(id)
+);
+
+-- Decks
+CREATE TABLE decks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  name TEXT NOT NULL,
+  format TEXT,
+  description TEXT,
+  created_at INTEGER,
+  updated_at INTEGER
+);
+
+-- Deck cards
+CREATE TABLE deck_cards (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  deck_id INTEGER,
+  card_id TEXT,
+  quantity INTEGER DEFAULT 1,
+  is_sideboard BOOLEAN DEFAULT FALSE,
+  FOREIGN KEY (deck_id) REFERENCES decks(id),
+  FOREIGN KEY (card_id) REFERENCES cards(id)
+);
+```
+
+### 5.2 Performance Optimizations
+- **WAL Mode**: Enabled for better concurrent access
+- **Pragma Settings**: Optimized for mobile performance
+- **Batch Operations**: Use transactions for bulk inserts
+- **Background Processing**: Heavy operations in isolates
+
+## 6. UI Design System
+
+### 6.1 Discord Color Palette
+```dart
+class DiscordColors {
+  static const Color blurple = Color(0xFF5865F2);
+  static const Color darkButNotBlack = Color(0xFF2C2F33);
+  static const Color notQuiteBlack = Color(0xFF23272A);
+  static const Color greyple = Color(0xFF99AAB5);
+  static const Color darkGrey = Color(0xFF323339);
+  static const Color green = Color(0xFF57F287);
+  static const Color yellow = Color(0xFFFEE75C);
+  static const Color fuchsia = Color(0xFFEB459E);
+  static const Color red = Color(0xFFED4245);
+  static const Color white = Color(0xFFFFFFFF);
+}
+```
+
+### 6.2 Layout Specifications
+- **Sidebar Width**: 72px (servers) + 240px (channels)
+- **Main Content**: Flexible width with max constraints
+- **Card Grid**: Responsive grid with optimal card display
+- **Border Radius**: 8px for modern Discord styling
+- **Spacing**: 8px base unit system
+
+## 7. Development Phases Breakdown
+
+### Phase 1: Foundation (Weeks 1-3)
+- [x] Technical requirements and architecture planning
+- [ ] Project setup and dependency configuration
+- [ ] Database implementation and migration system
+- [ ] Core repository pattern implementation
+- [ ] Basic Discord UI theme setup
+
+### Phase 2: Core MTG Features (Weeks 4-6)
+- [ ] Scryfall API integration
+- [ ] Card display and search functionality
+- [ ] Deck building core logic
+- [ ] Collection management features
+
+### Phase 3: Advanced UI (Weeks 7-9)
+- [ ] Complete Discord-style interface
+- [ ] Card recognition (OCR)
+- [ ] Performance optimization
+- [ ] Advanced filtering and search
+
+### Phase 4: Real-time Features (Weeks 10-12)
+- [ ] WebSocket implementation
+- [ ] Real-time deck sharing
+- [ ] Social features
+- [ ] Offline synchronization
+
+### Phase 5: Production Polish (Weeks 13-15)
+- [ ] Error handling and monitoring
+- [ ] Accessibility compliance
+- [ ] Performance testing
+- [ ] Deployment and CI/CD
+
+## 8. Testing Strategy
+
+### 8.1 Unit Testing
+- Repository layer testing
+- BLoC testing with bloc_test
+- Business logic validation
+- Database operation testing
+
+### 8.2 Integration Testing
+- API integration testing
+- Database migration testing
+- End-to-end deck building workflows
+
+### 8.3 Performance Testing
+- Large dataset performance (25k+ cards)
+- Memory usage optimization
+- UI responsiveness testing
+
+## 9. Risk Mitigation
+
+### 9.1 Performance Risks
+- **Mitigation**: Early performance testing with large datasets
+- **Fallback**: Pagination and lazy loading strategies
+
+### 9.2 API Dependency
+- **Mitigation**: Robust offline-first architecture
+- **Fallback**: Local fallback data and graceful degradation
+
+### 9.3 Complexity Management
+- **Mitigation**: Incremental development with working deliverables
+- **Fallback**: Feature prioritization and scope adjustment
+
+## 10. Success Metrics
+
+### 10.1 Technical Metrics
+- Database query performance: < 3ms average
+- UI frame rate: Consistent 60fps
+- App startup time: < 3 seconds
+- Memory usage: < 200MB with full card database
+
+### 10.2 Feature Metrics
+- Card search response time: < 500ms
+- Deck building workflow completion
+- Offline functionality coverage: 100%
+- Discord UI accuracy: Pixel-perfect matching
+
+---
+
+**Next Steps**: Proceed to Phase 1 implementation with project setup and database foundation.
