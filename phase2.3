@@ -1,0 +1,1175 @@
+// Phase 2.3: Card Detail Views & Deck Building Foundation
+
+// ===== 1. Card Detail Page =====
+
+// features/cards/presentation/pages/card_detail_page.dart
+import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../../domain/entities/card.dart';
+import '../../../../core/theme/discord_colors.dart';
+import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/base_widgets.dart';
+import '../../../../core/constants/app_constants.dart';
+
+class CardDetailPage extends StatelessWidget {
+  final Card card;
+  
+  const CardDetailPage({
+    super.key,
+    required this.card,
+  });
+  
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: DiscordColors.backgroundPrimary,
+      appBar: AppBar(
+        title: Text(card.name),
+        backgroundColor: DiscordColors.backgroundSecondary,
+        actions: [
+          IconButton(
+            icon: const Icon(Icons.share),
+            onPressed: () => _shareCard(context),
+          ),
+          IconButton(
+            icon: const Icon(Icons.favorite_border),
+            onPressed: () => _toggleFavorite(context),
+          ),
+          PopupMenuButton(
+            itemBuilder: (context) => [
+              const PopupMenuItem(
+                value: 'add_to_deck',
+                child: ListTile(
+                  leading: Icon(Icons.add),
+                  title: Text('Add to Deck'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'add_to_collection',
+                child: ListTile(
+                  leading: Icon(Icons.library_add),
+                  title: Text('Add to Collection'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+              const PopupMenuItem(
+                value: 'view_prints',
+                child: ListTile(
+                  leading: Icon(Icons.library_books),
+                  title: Text('View All Prints'),
+                  contentPadding: EdgeInsets.zero,
+                ),
+              ),
+            ],
+            onSelected: (value) => _handleMenuAction(context, value),
+          ),
+        ],
+      ),
+      body: LayoutBuilder(
+        builder: (context, constraints) {
+          if (constraints.maxWidth < AppConstants.tabletBreakpoint) {
+            return _buildMobileLayout();
+          } else {
+            return _buildDesktopLayout();
+          }
+        },
+      ),
+    );
+  }
+  
+  Widget _buildMobileLayout() {
+    return SingleChildScrollView(
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          _buildCardImage(),
+          const SizedBox(height: 16),
+          _buildCardInfo(),
+          const SizedBox(height: 16),
+          _buildCardText(),
+          const SizedBox(height: 16),
+          _buildLegalities(),
+          const SizedBox(height: 16),
+          _buildPriceInfo(),
+          const SizedBox(height: 16),
+          _buildSetInfo(),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildDesktopLayout() {
+    return Padding(
+      padding: const EdgeInsets.all(24),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Left side - Card image
+          SizedBox(
+            width: 300,
+            child: _buildCardImage(),
+          ),
+          
+          const SizedBox(width: 24),
+          
+          // Right side - Card details
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  _buildCardInfo(),
+                  const SizedBox(height: 16),
+                  _buildCardText(),
+                  const SizedBox(height: 16),
+                  _buildLegalities(),
+                  const SizedBox(height: 16),
+                  _buildPriceInfo(),
+                  const SizedBox(height: 16),
+                  _buildSetInfo(),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildCardImage() {
+    return DiscordCard(
+      padding: const EdgeInsets.all(8),
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(8),
+        child: CachedNetworkImage(
+          imageUrl: card.mainImageUrl,
+          fit: BoxFit.contain,
+          placeholder: (context, url) => AspectRatio(
+            aspectRatio: AppConstants.cardAspectRatio,
+            child: Container(
+              decoration: BoxDecoration(
+                color: DiscordColors.backgroundAccent,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Center(
+                child: CircularProgressIndicator(
+                  valueColor: AlwaysStoppedAnimation(DiscordColors.blurple),
+                ),
+              ),
+            ),
+          ),
+          errorWidget: (context, url, error) => AspectRatio(
+            aspectRatio: AppConstants.cardAspectRatio,
+            child: Container(
+              decoration: BoxDecoration(
+                color: DiscordColors.backgroundAccent,
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(
+                    Icons.broken_image,
+                    size: 48,
+                    color: DiscordColors.textMuted,
+                  ),
+                  const SizedBox(height: 8),
+                  Text(
+                    'Image not available',
+                    style: AppTextStyles.bodySmall,
+                    textAlign: TextAlign.center,
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildCardInfo() {
+    return DiscordCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Name and mana cost
+          Row(
+            children: [
+              Expanded(
+                child: Text(
+                  card.name,
+                  style: AppTextStyles.heading2,
+                ),
+              ),
+              if (card.manaCost != null && card.manaCost!.isNotEmpty)
+                _buildManaCost(),
+            ],
+          ),
+          
+          const SizedBox(height: 8),
+          
+          // Type line
+          if (card.typeLine != null) ...[
+            Text(
+              card.typeLine!,
+              style: AppTextStyles.bodyLarge.copyWith(
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+            const SizedBox(height: 8),
+          ],
+          
+          // Stats row
+          Row(
+            children: [
+              if (card.cmc != null) ...[
+                _buildStatChip('CMC', card.cmc!.toInt().toString()),
+                const SizedBox(width: 8),
+              ],
+              if (card.power != null && card.toughness != null) ...[
+                _buildStatChip('P/T', '${card.power}/${card.toughness}'),
+                const SizedBox(width: 8),
+              ],
+              if (card.rarity != null) ...[
+                _buildRarityChip(),
+                const SizedBox(width: 8),
+              ],
+            ],
+          ),
+          
+          const SizedBox(height: 8),
+          
+          // Colors
+          if (card.colors.isNotEmpty) ...[
+            Row(
+              children: [
+                Text(
+                  'Colors: ',
+                  style: AppTextStyles.labelMedium,
+                ),
+                ...card.colors.map((color) => Padding(
+                  padding: const EdgeInsets.only(right: 4),
+                  child: _buildColorChip(color),
+                )),
+              ],
+            ),
+            const SizedBox(height: 8),
+          ],
+          
+          // Keywords
+          if (card.keywords.isNotEmpty) ...[
+            Wrap(
+              spacing: 4,
+              runSpacing: 4,
+              children: card.keywords.map((keyword) => Chip(
+                label: Text(
+                  keyword,
+                  style: AppTextStyles.labelSmall,
+                ),
+                backgroundColor: DiscordColors.backgroundAccent,
+                side: const BorderSide(color: DiscordColors.borderStrong),
+              )).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildCardText() {
+    if (card.oracleText == null || card.oracleText!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return DiscordCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Oracle Text',
+            style: AppTextStyles.heading4,
+          ),
+          const SizedBox(height: 8),
+          Container(
+            width: double.infinity,
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: DiscordColors.backgroundTertiary,
+              borderRadius: BorderRadius.circular(8),
+              border: Border.all(color: DiscordColors.borderSubtle),
+            ),
+            child: Text(
+              card.oracleText!,
+              style: AppTextStyles.bodyMedium,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildLegalities() {
+    if (card.legalities == null || card.legalities!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    final legalFormats = card.legalities!.entries
+        .where((entry) => entry.value == 'legal')
+        .map((entry) => entry.key)
+        .toList();
+    
+    if (legalFormats.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return DiscordCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Format Legality',
+            style: AppTextStyles.heading4,
+          ),
+          const SizedBox(height: 8),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: legalFormats.map((format) => Container(
+              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+              decoration: BoxDecoration(
+                color: DiscordColors.green.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: DiscordColors.green),
+              ),
+              child: Text(
+                format.toUpperCase(),
+                style: AppTextStyles.labelSmall.copyWith(
+                  color: DiscordColors.green,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+            )).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildPriceInfo() {
+    if (card.prices == null || card.prices!.isEmpty) {
+      return const SizedBox.shrink();
+    }
+    
+    return DiscordCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Market Prices',
+            style: AppTextStyles.heading4,
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              if (card.usdPrice != null) ...[
+                _buildPriceChip('USD', '\$${card.usdPrice!.toStringAsFixed(2)}'),
+                const SizedBox(width: 8),
+              ],
+              if (card.usdFoilPrice != null) ...[
+                _buildPriceChip('USD Foil', '\$${card.usdFoilPrice!.toStringAsFixed(2)}'),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildSetInfo() {
+    return DiscordCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Set Information',
+            style: AppTextStyles.heading4,
+          ),
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              if (card.setName != null) ...[
+                Expanded(
+                  child: Text(
+                    card.setName!,
+                    style: AppTextStyles.bodyMedium,
+                  ),
+                ),
+              ],
+              if (card.setCode != null) ...[
+                Text(
+                  card.setCode!.toUpperCase(),
+                  style: AppTextStyles.labelMedium.copyWith(
+                    color: DiscordColors.textSecondary,
+                  ),
+                ),
+              ],
+            ],
+          ),
+          if (card.collectorNumber != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Collector Number: ${card.collectorNumber}',
+              style: AppTextStyles.bodySmall,
+            ),
+          ],
+          if (card.artist != null) ...[
+            const SizedBox(height: 4),
+            Text(
+              'Artist: ${card.artist}',
+              style: AppTextStyles.bodySmall,
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+  
+  Widget _buildManaCost() {
+    final symbols = card.manaCostSymbols;
+    if (symbols.isEmpty) return const SizedBox.shrink();
+    
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: symbols.map((symbol) => _buildManaSymbol(symbol)).toList(),
+    );
+  }
+  
+  Widget _buildManaSymbol(String symbol) {
+    Color symbolColor;
+    Color textColor = DiscordColors.white;
+    
+    switch (symbol.toUpperCase()) {
+      case 'W':
+        symbolColor = DiscordColors.mtgWhite;
+        textColor = DiscordColors.black;
+        break;
+      case 'U':
+        symbolColor = DiscordColors.mtgBlue;
+        break;
+      case 'B':
+        symbolColor = DiscordColors.mtgBlack;
+        break;
+      case 'R':
+        symbolColor = DiscordColors.mtgRed;
+        break;
+      case 'G':
+        symbolColor = DiscordColors.mtgGreen;
+        break;
+      default:
+        symbolColor = DiscordColors.mtgColorless;
+    }
+    
+    return Container(
+      margin: const EdgeInsets.only(right: 4),
+      width: 24,
+      height: 24,
+      decoration: BoxDecoration(
+        color: symbolColor,
+        shape: BoxShape.circle,
+        border: Border.all(color: DiscordColors.borderStrong, width: 1),
+      ),
+      child: Center(
+        child: Text(
+          symbol,
+          style: AppTextStyles.labelSmall.copyWith(
+            color: textColor,
+            fontSize: 12,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildStatChip(String label, String value) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: DiscordColors.backgroundAccent,
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: DiscordColors.borderStrong),
+      ),
+      child: Text(
+        '$label: $value',
+        style: AppTextStyles.labelSmall,
+      ),
+    );
+  }
+  
+  Widget _buildRarityChip() {
+    Color rarityColor;
+    
+    switch (card.rarity?.toLowerCase()) {
+      case 'common':
+        rarityColor = DiscordColors.textSecondary;
+        break;
+      case 'uncommon':
+        rarityColor = Colors.silver;
+        break;
+      case 'rare':
+        rarityColor = Colors.amber;
+        break;
+      case 'mythic':
+        rarityColor = Colors.deepOrange;
+        break;
+      default:
+        rarityColor = DiscordColors.textMuted;
+    }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: rarityColor.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: rarityColor),
+      ),
+      child: Text(
+        card.rarity?.toUpperCase() ?? 'UNKNOWN',
+        style: AppTextStyles.labelSmall.copyWith(
+          color: rarityColor,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildColorChip(String color) {
+    return _buildManaSymbol(color);
+  }
+  
+  Widget _buildPriceChip(String label, String price) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: DiscordColors.green.withOpacity(0.1),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: DiscordColors.green),
+      ),
+      child: Text(
+        '$label: $price',
+        style: AppTextStyles.labelSmall.copyWith(
+          color: DiscordColors.green,
+          fontWeight: FontWeight.w600,
+        ),
+      ),
+    );
+  }
+  
+  void _shareCard(BuildContext context) {
+    // TODO: Implement card sharing
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Sharing ${card.name}...'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+  
+  void _toggleFavorite(BuildContext context) {
+    // TODO: Implement favorites
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Added ${card.name} to favorites'),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+  
+  void _handleMenuAction(BuildContext context, String action) {
+    switch (action) {
+      case 'add_to_deck':
+        // TODO: Show deck selection dialog
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Add ${card.name} to deck'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        break;
+      case 'add_to_collection':
+        // TODO: Add to collection
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Added ${card.name} to collection'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        break;
+      case 'view_prints':
+        // TODO: Show all prints
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('Viewing all prints of ${card.name}'),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+        break;
+    }
+  }
+}
+
+// ===== 2. Enhanced Deck Entities =====
+
+// features/decks/domain/entities/deck.dart (enhanced)
+import 'package:equatable/equatable.dart';
+import 'deck_card.dart';
+import '../../../cards/domain/entities/card.dart';
+
+enum DeckFormat {
+  standard,
+  modern,
+  legacy,
+  vintage,
+  commander,
+  pioneer,
+  historic,
+  limited,
+  custom,
+}
+
+extension DeckFormatExtension on DeckFormat {
+  String get displayName {
+    switch (this) {
+      case DeckFormat.standard:
+        return 'Standard';
+      case DeckFormat.modern:
+        return 'Modern';
+      case DeckFormat.legacy:
+        return 'Legacy';
+      case DeckFormat.vintage:
+        return 'Vintage';
+      case DeckFormat.commander:
+        return 'Commander';
+      case DeckFormat.pioneer:
+        return 'Pioneer';
+      case DeckFormat.historic:
+        return 'Historic';
+      case DeckFormat.limited:
+        return 'Limited';
+      case DeckFormat.custom:
+        return 'Custom';
+    }
+  }
+  
+  int get minDeckSize {
+    switch (this) {
+      case DeckFormat.commander:
+        return 100;
+      case DeckFormat.limited:
+        return 40;
+      default:
+        return 60;
+    }
+  }
+  
+  int get maxDeckSize {
+    switch (this) {
+      case DeckFormat.commander:
+        return 100;
+      default:
+        return -1; // No limit
+    }
+  }
+  
+  int get maxSideboardSize {
+    switch (this) {
+      case DeckFormat.commander:
+        return 0;
+      default:
+        return 15;
+    }
+  }
+  
+  int get maxCopiesPerCard {
+    switch (this) {
+      case DeckFormat.commander:
+        return 1;
+      default:
+        return 4;
+    }
+  }
+}
+
+class Deck extends Equatable {
+  final int? id;
+  final String name;
+  final DeckFormat format;
+  final String? description;
+  final List<DeckCard> mainboard;
+  final List<DeckCard> sideboard;
+  final String? notes;
+  final List<String> tags;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  const Deck({
+    this.id,
+    required this.name,
+    this.format = DeckFormat.standard,
+    this.description,
+    this.mainboard = const [],
+    this.sideboard = const [],
+    this.notes,
+    this.tags = const [],
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  @override
+  List<Object?> get props => [
+        id,
+        name,
+        format,
+        description,
+        mainboard,
+        sideboard,
+        notes,
+        tags,
+        createdAt,
+        updatedAt,
+      ];
+
+  // Deck Statistics
+  int get mainboardCount => mainboard.fold(0, (sum, card) => sum + card.quantity);
+  int get sideboardCount => sideboard.fold(0, (sum, card) => sum + card.quantity);
+  int get totalCards => mainboardCount + sideboardCount;
+  
+  // Validation
+  bool get isValidDeckSize {
+    final minSize = format.minDeckSize;
+    final maxSize = format.maxDeckSize;
+    
+    if (mainboardCount < minSize) return false;
+    if (maxSize > 0 && mainboardCount > maxSize) return false;
+    if (sideboardCount > format.maxSideboardSize) return false;
+    
+    return true;
+  }
+  
+  List<String> get validationErrors {
+    final errors = <String>[];
+    
+    if (mainboardCount < format.minDeckSize) {
+      errors.add('Deck must have at least ${format.minDeckSize} cards in mainboard');
+    }
+    
+    if (format.maxDeckSize > 0 && mainboardCount > format.maxDeckSize) {
+      errors.add('Deck cannot have more than ${format.maxDeckSize} cards in mainboard');
+    }
+    
+    if (sideboardCount > format.maxSideboardSize) {
+      errors.add('Sideboard cannot have more than ${format.maxSideboardSize} cards');
+    }
+    
+    // Check for illegal number of copies
+    final cardCounts = <String, int>{};
+    for (final deckCard in [...mainboard, ...sideboard]) {
+      final cardName = deckCard.card.name;
+      cardCounts[cardName] = (cardCounts[cardName] ?? 0) + deckCard.quantity;
+    }
+    
+    for (final entry in cardCounts.entries) {
+      if (entry.value > format.maxCopiesPerCard && !_isBasicLand(entry.key)) {
+        errors.add('Too many copies of ${entry.key} (${entry.value}/${format.maxCopiesPerCard})');
+      }
+    }
+    
+    return errors;
+  }
+  
+  bool _isBasicLand(String cardName) {
+    const basicLands = {
+      'Plains', 'Island', 'Swamp', 'Mountain', 'Forest',
+      'Wastes', 'Snow-Covered Plains', 'Snow-Covered Island',
+      'Snow-Covered Swamp', 'Snow-Covered Mountain', 'Snow-Covered Forest'
+    };
+    return basicLands.contains(cardName);
+  }
+  
+  // Color Analysis
+  Map<String, int> get colorDistribution {
+    final Map<String, int> distribution = {
+      'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0,
+    };
+    
+    for (final deckCard in mainboard) {
+      final colors = deckCard.card.colors;
+      if (colors.isEmpty) {
+        distribution['C'] = (distribution['C'] ?? 0) + deckCard.quantity;
+      } else {
+        for (final color in colors) {
+          distribution[color] = (distribution[color] ?? 0) + deckCard.quantity;
+        }
+      }
+    }
+    
+    return distribution;
+  }
+  
+  List<String> get deckColors {
+    final colors = <String>[];
+    final distribution = colorDistribution;
+    
+    for (final entry in distribution.entries) {
+      if (entry.key != 'C' && entry.value > 0) {
+        colors.add(entry.key);
+      }
+    }
+    
+    return colors..sort();
+  }
+  
+  // Mana Curve Analysis
+  Map<int, int> get manaCurve {
+    final Map<int, int> curve = {};
+    
+    for (final deckCard in mainboard) {
+      final cmc = deckCard.card.cmc?.round() ?? 0;
+      curve[cmc] = (curve[cmc] ?? 0) + deckCard.quantity;
+    }
+    
+    return curve;
+  }
+  
+  double get averageCmc {
+    if (mainboard.isEmpty) return 0.0;
+    
+    double totalCmc = 0;
+    int totalCards = 0;
+    
+    for (final deckCard in mainboard) {
+      final cmc = deckCard.card.cmc ?? 0;
+      totalCmc += cmc * deckCard.quantity;
+      totalCards += deckCard.quantity;
+    }
+    
+    return totalCards > 0 ? totalCmc / totalCards : 0.0;
+  }
+  
+  // Type Distribution
+  Map<String, int> get typeDistribution {
+    final Map<String, int> distribution = {};
+    
+    for (final deckCard in mainboard) {
+      final types = _extractMainTypes(deckCard.card.typeLine ?? '');
+      for (final type in types) {
+        distribution[type] = (distribution[type] ?? 0) + deckCard.quantity;
+      }
+    }
+    
+    return distribution;
+  }
+  
+  List<String> _extractMainTypes(String typeLine) {
+    final types = <String>[];
+    final lowerTypeLine = typeLine.toLowerCase();
+    
+    if (lowerTypeLine.contains('creature')) types.add('Creature');
+    if (lowerTypeLine.contains('instant')) types.add('Instant');
+    if (lowerTypeLine.contains('sorcery')) types.add('Sorcery');
+    if (lowerTypeLine.contains('artifact')) types.add('Artifact');
+    if (lowerTypeLine.contains('enchantment')) types.add('Enchantment');
+    if (lowerTypeLine.contains('planeswalker')) types.add('Planeswalker');
+    if (lowerTypeLine.contains('land')) types.add('Land');
+    if (lowerTypeLine.contains('battle')) types.add('Battle');
+    
+    return types.isNotEmpty ? types : ['Other'];
+  }
+  
+  // Deck Building Helpers
+  bool canAddCard(Card card, {bool isSideboard = false}) {
+    final currentCopies = _getCardCopies(card.name);
+    return currentCopies < format.maxCopiesPerCard || _isBasicLand(card.name);
+  }
+  
+  int _getCardCopies(String cardName) {
+    int count = 0;
+    for (final deckCard in [...mainboard, ...sideboard]) {
+      if (deckCard.card.name == cardName) {
+        count += deckCard.quantity;
+      }
+    }
+    return count;
+  }
+  
+  Deck copyWith({
+    int? id,
+    String? name,
+    DeckFormat? format,
+    String? description,
+    List<DeckCard>? mainboard,
+    List<DeckCard>? sideboard,
+    String? notes,
+    List<String>? tags,
+    DateTime? createdAt,
+    DateTime? updatedAt,
+  }) {
+    return Deck(
+      id: id ?? this.id,
+      name: name ?? this.name,
+      format: format ?? this.format,
+      description: description ?? this.description,
+      mainboard: mainboard ?? this.mainboard,
+      sideboard: sideboard ?? this.sideboard,
+      notes: notes ?? this.notes,
+      tags: tags ?? this.tags,
+      createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+    );
+  }
+}
+
+// ===== 3. Deck Building Use Cases =====
+
+// features/decks/domain/usecases/create_deck.dart
+import 'package:dartz/dartz.dart';
+import 'package:equatable/equatable.dart';
+import '../entities/deck.dart';
+import '../repositories/deck_repository.dart';
+import '../../../../core/errors/failures.dart';
+
+class CreateDeck {
+  final DeckRepository repository;
+  
+  CreateDeck(this.repository);
+  
+  Future<Either<Failure, Deck>> call(CreateDeckParams params) async {
+    final deck = Deck(
+      name: params.name,
+      format: params.format,
+      description: params.description,
+      notes: params.notes,
+      tags: params.tags,
+      createdAt: DateTime.now(),
+      updatedAt: DateTime.now(),
+    );
+    
+    return await repository.createDeck(deck);
+  }
+}
+
+class CreateDeckParams extends Equatable {
+  final String name;
+  final DeckFormat format;
+  final String? description;
+  final String? notes;
+  final List<String> tags;
+  
+  const CreateDeckParams({
+    required this.name,
+    this.format = DeckFormat.standard,
+    this.description,
+    this.notes,
+    this.tags = const [],
+  });
+  
+  @override
+  List<Object?> get props => [name, format, description, notes, tags];
+}
+
+// features/decks/domain/usecases/add_card_to_deck.dart
+import 'package:dartz/dartz.dart';
+import 'package:equatable/equatable.dart';
+import '../entities/deck.dart';
+import '../entities/deck_card.dart';
+import '../repositories/deck_repository.dart';
+import '../../../cards/domain/entities/card.dart';
+import '../../../../core/errors/failures.dart';
+
+class AddCardToDeck {
+  final DeckRepository repository;
+  
+  AddCardToDeck(this.repository);
+  
+  Future<Either<Failure, Deck>> call(AddCardToDeckParams params) async {
+    // Get current deck
+    final deckResult = await repository.getDeckById(params.deckId);
+    
+    return deckResult.fold(
+      (failure) => Left(failure),
+      (deck) async {
+        if (deck == null) {
+          return const Left(DatabaseFailure('Deck not found'));
+        }
+        
+        // Check if card can be added
+        if (!deck.canAddCard(params.card, isSideboard: params.isSideboard)) {
+          return Left(ValidationFailure(
+            'Cannot add more copies of ${params.card.name} to deck'
+          ));
+        }
+        
+        // Add card to deck
+        final updatedDeck = _addCardToDeck(deck, params);
+        
+        return await repository.updateDeck(updatedDeck);
+      },
+    );
+  }
+  
+  Deck _addCardToDeck(Deck deck, AddCardToDeckParams params) {
+    final targetList = params.isSideboard ? deck.sideboard : deck.mainboard;
+    
+    // Check if card already exists in the list
+    final existingIndex = targetList.indexWhere(
+      (deckCard) => deckCard.card.id == params.card.id,
+    );
+    
+    if (existingIndex != -1) {
+      // Update quantity of existing card
+      final existingCard = targetList[existingIndex];
+      final updatedCard = existingCard.copyWith(
+        quantity: existingCard.quantity + params.quantity,
+      );
+      
+      final updatedList = List<DeckCard>.from(targetList);
+      updatedList[existingIndex] = updatedCard;
+      
+      return params.isSideboard
+          ? deck.copyWith(sideboard: updatedList)
+          : deck.copyWith(mainboard: updatedList);
+    } else {
+      // Add new card
+      final newDeckCard = DeckCard(
+        card: params.card,
+        quantity: params.quantity,
+        isSideboard: params.isSideboard,
+      );
+      
+      final updatedList = List<DeckCard>.from(targetList)..add(newDeckCard);
+      
+      return params.isSideboard
+          ? deck.copyWith(sideboard: updatedList)
+          : deck.copyWith(mainboard: updatedList);
+    }
+  }
+}
+
+class AddCardToDeckParams extends Equatable {
+  final int deckId;
+  final Card card;
+  final int quantity;
+  final bool isSideboard;
+  
+  const AddCardToDeckParams({
+    required this.deckId,
+    required this.card,
+    this.quantity = 1,
+    this.isSideboard = false,
+  });
+  
+  @override
+  List<Object> get props => [deckId, card, quantity, isSideboard];
+}
+
+// features/decks/domain/usecases/validate_deck.dart
+import 'package:dartz/dartz.dart';
+import 'package:equatable/equatable.dart';
+import '../entities/deck.dart';
+import '../../../../core/errors/failures.dart';
+
+class ValidateDeck {
+  Future<Either<Failure, DeckValidationResult>> call(ValidateDeckParams params) async {
+    final deck = params.deck;
+    final errors = deck.validationErrors;
+    final warnings = <String>[];
+    
+    // Add warnings for deck optimization
+    if (deck.mainboardCount > deck.format.minDeckSize + 10) {
+      warnings.add('Deck is larger than recommended (${deck.mainboardCount} cards)');
+    }
+    
+    if (deck.averageCmc > 4.0) {
+      warnings.add('High average mana cost (${deck.averageCmc.toStringAsFixed(1)})');
+    }
+    
+    final landCount = deck.typeDistribution['Land'] ?? 0;
+    final landRatio = deck.mainboardCount > 0 ? landCount / deck.mainboardCount : 0;
+    
+    if (landRatio < 0.33) {
+      warnings.add('Low land count (${(landRatio * 100).toStringAsFixed(0)}%)');
+    } else if (landRatio > 0.45) {
+      warnings.add('High land count (${(landRatio * 100).toStringAsFixed(0)}%)');
+    }
+    
+    final result = DeckValidationResult(
+      isValid: errors.isEmpty,
+      errors: errors,
+      warnings: warnings,
+      suggestions: _generateSuggestions(deck),
+    );
+    
+    return Right(result);
+  }
+  
+  List<String> _generateSuggestions(Deck deck) {
+    final suggestions = <String>[];
+    
+    // Mana curve suggestions
+    final curve = deck.manaCurve;
+    final lowCostCards = (curve[0] ?? 0) + (curve[1] ?? 0) + (curve[2] ?? 0);
+    
+    if (lowCostCards < deck.mainboardCount * 0.3) {
+      suggestions.add('Consider adding more low-cost cards for early game');
+    }
+    
+    // Color suggestions
+    final colors = deck.deckColors;
+    if (colors.length > 3) {
+      suggestions.add('Consider reducing colors for better mana consistency');
+    }
+    
+    return suggestions;
+  }
+}
+
+class ValidateDeckParams extends Equatable {
+  final Deck deck;
+  
+  const ValidateDeckParams({required this.deck});
+  
+  @override
+  List<Object> get props => [deck];
+}
+
+class DeckValidationResult extends Equatable {
+  final bool isValid;
+  final List<String> errors;
+  final List<String> warnings;
+  final List<String> suggestions;
+  
+  const DeckValidationResult({
+    required this.isValid,
+    this.errors = const [],
+    this.warnings = const [],
+    this.suggestions = const [],
+  });
+  
+  @override
+  List<Object> get props => [isValid, errors, warnings, suggestions];
+}
+
+This implementation provides:
+✅ **Detailed Card Views**: Comprehensive card information display
+✅ **Responsive Design**: Mobile and desktop layouts
+✅ **Deck Format Support**: All major MTG formats with validation
+✅ **Deck Statistics**: Mana curve, color distribution, type analysis
+✅ **Validation System**: Format-specific deck validation
+✅ **Use Case Architecture**: Clean deck building operations
+✅ **Visual Design**: Discord-styled components throughout
+✅ **Performance Optimized**: Efficient image loading and caching
+
+Next: Collection management and deck builder UI implementation.
