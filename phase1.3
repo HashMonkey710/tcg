@@ -1,0 +1,666 @@
+// Database Implementation for MTG Arena Clone
+
+// ===== 1. Core Database Configuration =====
+
+// shared/data/database/app_database.dart
+import 'dart:io';
+import 'package:path/path.dart';
+import 'package:path_provider/path_provider.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+import 'package:sqflite/sqflite.dart';
+import 'migrations/migration_v1.dart';
+
+class AppDatabase {
+  static const String _databaseName = 'mtg_arena_clone.db';
+  static const int _databaseVersion = 1;
+  
+  static Database? _database;
+  
+  AppDatabase._();
+  static final AppDatabase instance = AppDatabase._();
+  
+  Future<Database> get database async {
+    _database ??= await _initDatabase();
+    return _database!;
+  }
+  
+  Future<Database> _initDatabase() async {
+    // Use FFI for better performance
+    if (Platform.isWindows || Platform.isLinux || Platform.isMacOS) {
+      sqfliteFfiInit();
+      databaseFactory = databaseFactoryFfi;
+    }
+    
+    final documentsDirectory = await getApplicationDocumentsDirectory();
+    final path = join(documentsDirectory.path, _databaseName);
+    
+    return await openDatabase(
+      path,
+      version: _databaseVersion,
+      onCreate: _onCreate,
+      onUpgrade: _onUpgrade,
+      onConfigure: _onConfigure,
+    );
+  }
+  
+  Future<void> _onConfigure(Database db) async {
+    // Enable WAL mode for better performance
+    await db.execute('PRAGMA journal_mode=WAL');
+    // Optimize for mobile performance
+    await db.execute('PRAGMA synchronous=NORMAL');
+    await db.execute('PRAGMA cache_size=10000');
+    await db.execute('PRAGMA temp_store=MEMORY');
+    // Enable foreign keys
+    await db.execute('PRAGMA foreign_keys=ON');
+  }
+  
+  Future<void> _onCreate(Database db, int version) async {
+    await MigrationV1.createTables(db);
+  }
+  
+  Future<void> _onUpgrade(Database db, int oldVersion, int newVersion) async {
+    // Handle future migrations
+  }
+  
+  Future<void> close() async {
+    final db = _database;
+    if (db != null) {
+      await db.close();
+      _database = null;
+    }
+  }
+}
+
+// ===== 2. Database Migrations =====
+
+// shared/data/database/migrations/migration_v1.dart
+import 'package:sqflite/sqflite.dart';
+
+class MigrationV1 {
+  static Future<void> createTables(Database db) async {
+    await _createCardsTable(db);
+    await _createCollectionsTable(db);
+    await _createCollectionCardsTable(db);
+    await _createDecksTable(db);
+    await _createDeckCardsTable(db);
+    await _createIndexes(db);
+  }
+  
+  static Future<void> _createCardsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE cards (
+        id TEXT PRIMARY KEY,
+        oracle_id TEXT,
+        name TEXT NOT NULL,
+        mana_cost TEXT,
+        cmc REAL,
+        type_line TEXT,
+        oracle_text TEXT,
+        power TEXT,
+        toughness TEXT,
+        colors TEXT,
+        color_identity TEXT,
+        keywords TEXT,
+        set_code TEXT,
+        set_name TEXT,
+        collector_number TEXT,
+        rarity TEXT,
+        artist TEXT,
+        image_uris TEXT,
+        prices TEXT,
+        legalities TEXT,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    ''');
+  }
+  
+  static Future<void> _createCollectionsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE collections (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        description TEXT,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    ''');
+  }
+  
+  static Future<void> _createCollectionCardsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE collection_cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        collection_id INTEGER,
+        card_id TEXT,
+        quantity INTEGER DEFAULT 1,
+        condition TEXT DEFAULT 'NM',
+        foil BOOLEAN DEFAULT FALSE,
+        FOREIGN KEY (collection_id) REFERENCES collections(id) ON DELETE CASCADE,
+        FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
+      )
+    ''');
+  }
+  
+  static Future<void> _createDecksTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE decks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        format TEXT,
+        description TEXT,
+        created_at INTEGER,
+        updated_at INTEGER
+      )
+    ''');
+  }
+  
+  static Future<void> _createDeckCardsTable(Database db) async {
+    await db.execute('''
+      CREATE TABLE deck_cards (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        deck_id INTEGER,
+        card_id TEXT,
+        quantity INTEGER DEFAULT 1,
+        is_sideboard BOOLEAN DEFAULT FALSE,
+        FOREIGN KEY (deck_id) REFERENCES decks(id) ON DELETE CASCADE,
+        FOREIGN KEY (card_id) REFERENCES cards(id) ON DELETE CASCADE
+      )
+    ''');
+  }
+  
+  static Future<void> _createIndexes(Database db) async {
+    // Critical indexes for 25k+ card performance
+    await db.execute('CREATE INDEX idx_cards_name ON cards(name)');
+    await db.execute('CREATE INDEX idx_cards_type_line ON cards(type_line)');
+    await db.execute('CREATE INDEX idx_cards_colors ON cards(colors)');
+    await db.execute('CREATE INDEX idx_cards_cmc ON cards(cmc)');
+    await db.execute('CREATE INDEX idx_cards_set_code ON cards(set_code)');
+    await db.execute('CREATE INDEX idx_cards_rarity ON cards(rarity)');
+    await db.execute('CREATE UNIQUE INDEX idx_cards_oracle_id ON cards(oracle_id)');
+    
+    // Collection indexes
+    await db.execute('CREATE INDEX idx_collection_cards_collection_id ON collection_cards(collection_id)');
+    await db.execute('CREATE INDEX idx_collection_cards_card_id ON collection_cards(card_id)');
+    
+    // Deck indexes
+    await db.execute('CREATE INDEX idx_deck_cards_deck_id ON deck_cards(deck_id)');
+    await db.execute('CREATE INDEX idx_deck_cards_card_id ON deck_cards(card_id)');
+    await db.execute('CREATE INDEX idx_deck_cards_sideboard ON deck_cards(is_sideboard)');
+  }
+}
+
+// ===== 3. Core Domain Entities =====
+
+// features/cards/domain/entities/card.dart
+import 'package:equatable/equatable.dart';
+
+class Card extends Equatable {
+  final String id;
+  final String? oracleId;
+  final String name;
+  final String? manaCost;
+  final double? cmc;
+  final String? typeLine;
+  final String? oracleText;
+  final String? power;
+  final String? toughness;
+  final List<String> colors;
+  final List<String> colorIdentity;
+  final List<String> keywords;
+  final String? setCode;
+  final String? setName;
+  final String? collectorNumber;
+  final String? rarity;
+  final String? artist;
+  final Map<String, String>? imageUris;
+  final Map<String, String>? prices;
+  final Map<String, String>? legalities;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  const Card({
+    required this.id,
+    this.oracleId,
+    required this.name,
+    this.manaCost,
+    this.cmc,
+    this.typeLine,
+    this.oracleText,
+    this.power,
+    this.toughness,
+    this.colors = const [],
+    this.colorIdentity = const [],
+    this.keywords = const [],
+    this.setCode,
+    this.setName,
+    this.collectorNumber,
+    this.rarity,
+    this.artist,
+    this.imageUris,
+    this.prices,
+    this.legalities,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  @override
+  List<Object?> get props => [
+        id,
+        oracleId,
+        name,
+        manaCost,
+        cmc,
+        typeLine,
+        oracleText,
+        power,
+        toughness,
+        colors,
+        colorIdentity,
+        keywords,
+        setCode,
+        setName,
+        collectorNumber,
+        rarity,
+        artist,
+        imageUris,
+        prices,
+        legalities,
+        createdAt,
+        updatedAt,
+      ];
+      
+  // Helper methods for MTG logic
+  bool get isCreature => typeLine?.toLowerCase().contains('creature') ?? false;
+  bool get isInstant => typeLine?.toLowerCase().contains('instant') ?? false;
+  bool get isSorcery => typeLine?.toLowerCase().contains('sorcery') ?? false;
+  bool get isArtifact => typeLine?.toLowerCase().contains('artifact') ?? false;
+  bool get isEnchantment => typeLine?.toLowerCase().contains('enchantment') ?? false;
+  bool get isLand => typeLine?.toLowerCase().contains('land') ?? false;
+  bool get isPlaneswalker => typeLine?.toLowerCase().contains('planeswalker') ?? false;
+  
+  bool get isLegal => legalities?.isNotEmpty ?? false;
+  bool isLegalIn(String format) => legalities?[format.toLowerCase()] == 'legal';
+  
+  String get mainImageUrl => imageUris?['normal'] ?? imageUris?['large'] ?? '';
+  String get smallImageUrl => imageUris?['small'] ?? mainImageUrl;
+}
+
+// features/decks/domain/entities/deck.dart
+import 'package:equatable/equatable.dart';
+import 'deck_card.dart';
+
+class Deck extends Equatable {
+  final int? id;
+  final String name;
+  final String? format;
+  final String? description;
+  final List<DeckCard> mainboard;
+  final List<DeckCard> sideboard;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  const Deck({
+    this.id,
+    required this.name,
+    this.format,
+    this.description,
+    this.mainboard = const [],
+    this.sideboard = const [],
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  @override
+  List<Object?> get props => [
+        id,
+        name,
+        format,
+        description,
+        mainboard,
+        sideboard,
+        createdAt,
+        updatedAt,
+      ];
+
+  // Deck validation and statistics
+  int get mainboardCount => mainboard.fold(0, (sum, card) => sum + card.quantity);
+  int get sideboardCount => sideboard.fold(0, (sum, card) => sum + card.quantity);
+  int get totalCards => mainboardCount + sideboardCount;
+  
+  bool get isValidDeckSize {
+    switch (format?.toLowerCase()) {
+      case 'standard':
+      case 'modern':
+      case 'pioneer':
+        return mainboardCount >= 60 && sideboardCount <= 15;
+      case 'commander':
+      case 'edh':
+        return mainboardCount == 100 && sideboardCount == 0;
+      case 'limited':
+        return mainboardCount >= 40;
+      default:
+        return mainboardCount >= 60;
+    }
+  }
+  
+  Map<String, int> get colorDistribution {
+    final Map<String, int> distribution = {
+      'W': 0, 'U': 0, 'B': 0, 'R': 0, 'G': 0, 'C': 0,
+    };
+    
+    for (final deckCard in mainboard) {
+      final colors = deckCard.card.colors;
+      if (colors.isEmpty) {
+        distribution['C'] = (distribution['C'] ?? 0) + deckCard.quantity;
+      } else {
+        for (final color in colors) {
+          distribution[color] = (distribution[color] ?? 0) + deckCard.quantity;
+        }
+      }
+    }
+    
+    return distribution;
+  }
+  
+  Map<int, int> get manaCurve {
+    final Map<int, int> curve = {};
+    
+    for (final deckCard in mainboard) {
+      final cmc = deckCard.card.cmc?.round() ?? 0;
+      curve[cmc] = (curve[cmc] ?? 0) + deckCard.quantity;
+    }
+    
+    return curve;
+  }
+}
+
+// features/decks/domain/entities/deck_card.dart
+import 'package:equatable/equatable.dart';
+import '../../cards/domain/entities/card.dart';
+
+class DeckCard extends Equatable {
+  final int? id;
+  final Card card;
+  final int quantity;
+  final bool isSideboard;
+
+  const DeckCard({
+    this.id,
+    required this.card,
+    required this.quantity,
+    this.isSideboard = false,
+  });
+
+  @override
+  List<Object?> get props => [id, card, quantity, isSideboard];
+  
+  DeckCard copyWith({
+    int? id,
+    Card? card,
+    int? quantity,
+    bool? isSideboard,
+  }) {
+    return DeckCard(
+      id: id ?? this.id,
+      card: card ?? this.card,
+      quantity: quantity ?? this.quantity,
+      isSideboard: isSideboard ?? this.isSideboard,
+    );
+  }
+}
+
+// ===== 4. Data Models with JSON Serialization =====
+
+// features/cards/data/models/card_model.dart
+import 'dart:convert';
+import 'package:json_annotation/json_annotation.dart';
+import '../../domain/entities/card.dart';
+
+part 'card_model.g.dart';
+
+@JsonSerializable()
+class CardModel extends Card {
+  const CardModel({
+    required super.id,
+    super.oracleId,
+    required super.name,
+    super.manaCost,
+    super.cmc,
+    super.typeLine,
+    super.oracleText,
+    super.power,
+    super.toughness,
+    super.colors,
+    super.colorIdentity,
+    super.keywords,
+    super.setCode,
+    super.setName,
+    super.collectorNumber,
+    super.rarity,
+    super.artist,
+    super.imageUris,
+    super.prices,
+    super.legalities,
+    super.createdAt,
+    super.updatedAt,
+  });
+
+  factory CardModel.fromJson(Map<String, dynamic> json) => _$CardModelFromJson(json);
+  Map<String, dynamic> toJson() => _$CardModelToJson(this);
+
+  // Database conversion methods
+  factory CardModel.fromDatabase(Map<String, dynamic> map) {
+    return CardModel(
+      id: map['id'] as String,
+      oracleId: map['oracle_id'] as String?,
+      name: map['name'] as String,
+      manaCost: map['mana_cost'] as String?,
+      cmc: map['cmc'] as double?,
+      typeLine: map['type_line'] as String?,
+      oracleText: map['oracle_text'] as String?,
+      power: map['power'] as String?,
+      toughness: map['toughness'] as String?,
+      colors: _parseJsonList(map['colors']),
+      colorIdentity: _parseJsonList(map['color_identity']),
+      keywords: _parseJsonList(map['keywords']),
+      setCode: map['set_code'] as String?,
+      setName: map['set_name'] as String?,
+      collectorNumber: map['collector_number'] as String?,
+      rarity: map['rarity'] as String?,
+      artist: map['artist'] as String?,
+      imageUris: _parseJsonMap(map['image_uris']),
+      prices: _parseJsonMap(map['prices']),
+      legalities: _parseJsonMap(map['legalities']),
+      createdAt: map['created_at'] != null 
+          ? DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int)
+          : null,
+      updatedAt: map['updated_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['updated_at'] as int)
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toDatabase() {
+    return {
+      'id': id,
+      'oracle_id': oracleId,
+      'name': name,
+      'mana_cost': manaCost,
+      'cmc': cmc,
+      'type_line': typeLine,
+      'oracle_text': oracleText,
+      'power': power,
+      'toughness': toughness,
+      'colors': jsonEncode(colors),
+      'color_identity': jsonEncode(colorIdentity),
+      'keywords': jsonEncode(keywords),
+      'set_code': setCode,
+      'set_name': setName,
+      'collector_number': collectorNumber,
+      'rarity': rarity,
+      'artist': artist,
+      'image_uris': imageUris != null ? jsonEncode(imageUris) : null,
+      'prices': prices != null ? jsonEncode(prices) : null,
+      'legalities': legalities != null ? jsonEncode(legalities) : null,
+      'created_at': createdAt?.millisecondsSinceEpoch,
+      'updated_at': updatedAt?.millisecondsSinceEpoch,
+    };
+  }
+
+  // Helper methods for JSON parsing
+  static List<String> _parseJsonList(dynamic value) {
+    if (value == null) return [];
+    if (value is String) {
+      try {
+        final List<dynamic> decoded = jsonDecode(value);
+        return decoded.cast<String>();
+      } catch (e) {
+        return [];
+      }
+    }
+    if (value is List) return value.cast<String>();
+    return [];
+  }
+
+  static Map<String, String>? _parseJsonMap(dynamic value) {
+    if (value == null) return null;
+    if (value is String) {
+      try {
+        final Map<String, dynamic> decoded = jsonDecode(value);
+        return decoded.cast<String, String>();
+      } catch (e) {
+        return null;
+      }
+    }
+    if (value is Map) return value.cast<String, String>();
+    return null;
+  }
+}
+
+// ===== 5. Database Helper for Optimized Operations =====
+
+// shared/data/database/database_helper.dart
+import 'package:sqflite/sqflite.dart';
+import 'app_database.dart';
+
+class DatabaseHelper {
+  static const int _batchSize = 500;
+  
+  // Optimized batch insert for bulk operations (Scryfall sync)
+  static Future<void> batchInsertCards(List<Map<String, dynamic>> cards) async {
+    final db = await AppDatabase.instance.database;
+    
+    for (int i = 0; i < cards.length; i += _batchSize) {
+      final batch = db.batch();
+      final end = (i + _batchSize < cards.length) ? i + _batchSize : cards.length;
+      
+      for (int j = i; j < end; j++) {
+        batch.insert(
+          'cards',
+          cards[j],
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+      
+      await batch.commit(noResult: true);
+    }
+  }
+  
+  // Optimized search with proper indexing
+  static Future<List<Map<String, dynamic>>> searchCards({
+    String? name,
+    List<String>? colors,
+    String? typeLine,
+    double? minCmc,
+    double? maxCmc,
+    String? setCode,
+    String? rarity,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    final db = await AppDatabase.instance.database;
+    
+    final whereClause = <String>[];
+    final whereArgs = <dynamic>[];
+    
+    if (name != null && name.isNotEmpty) {
+      whereClause.add('name LIKE ?');
+      whereArgs.add('%$name%');
+    }
+    
+    if (colors != null && colors.isNotEmpty) {
+      final colorConditions = colors.map((_) => 'colors LIKE ?').join(' OR ');
+      whereClause.add('($colorConditions)');
+      whereArgs.addAll(colors.map((color) => '%"$color"%'));
+    }
+    
+    if (typeLine != null && typeLine.isNotEmpty) {
+      whereClause.add('type_line LIKE ?');
+      whereArgs.add('%$typeLine%');
+    }
+    
+    if (minCmc != null) {
+      whereClause.add('cmc >= ?');
+      whereArgs.add(minCmc);
+    }
+    
+    if (maxCmc != null) {
+      whereClause.add('cmc <= ?');
+      whereArgs.add(maxCmc);
+    }
+    
+    if (setCode != null && setCode.isNotEmpty) {
+      whereClause.add('set_code = ?');
+      whereArgs.add(setCode);
+    }
+    
+    if (rarity != null && rarity.isNotEmpty) {
+      whereClause.add('rarity = ?');
+      whereArgs.add(rarity);
+    }
+    
+    final whereString = whereClause.isNotEmpty ? 'WHERE ${whereClause.join(' AND ')}' : '';
+    
+    return await db.rawQuery('''
+      SELECT * FROM cards 
+      $whereString
+      ORDER BY name
+      LIMIT ? OFFSET ?
+    ''', [...whereArgs, limit, offset]);
+  }
+  
+  // Performance monitoring
+  static Future<Map<String, dynamic>> getDatabaseStats() async {
+    final db = await AppDatabase.instance.database;
+    
+    final cardCount = Sqflite.firstIntValue(
+      await db.rawQuery('SELECT COUNT(*) FROM cards')
+    ) ?? 0;
+    
+    final deckCount = Sqflite.firstIntValue(
+      await db.rawQuery('SELECT COUNT(*) FROM decks')
+    ) ?? 0;
+    
+    final collectionCount = Sqflite.firstIntValue(
+      await db.rawQuery('SELECT COUNT(*) FROM collections')
+    ) ?? 0;
+    
+    return {
+      'cards': cardCount,
+      'decks': deckCount,
+      'collections': collectionCount,
+    };
+  }
+}
+
+This database implementation provides:
+✅ **High Performance**: WAL mode, optimized indexes, batch operations
+✅ **Scalability**: Handles 25k+ cards efficiently
+✅ **Clean Architecture**: Proper entity/model separation
+✅ **Type Safety**: Strong typing with JSON serialization
+✅ **MTG-Specific Logic**: Deck validation, mana curves, color distribution
+✅ **Migration System**: Future-proof database updates
+✅ **Batch Operations**: Optimized for Scryfall bulk imports
+
+Next: Repository implementations and BLoC foundation.
