@@ -1,0 +1,59 @@
+Research Findings & Updated Recommendations
+MTG Data Strategy (Scryfall API)
+Scryfall provides daily bulk data exports and requires 50-100ms delays between API requests. The bulk data includes all 25,000+ cards and is updated daily, making it perfect for your offline-first strategy. ScryfallScryfall Key technical requirements:
+
+Rate Limiting: 10 requests per second maximum with proper User-Agent headers REST API Documentation · Scryfall Magic The Gathering Search
+Bulk Downloads: Daily exports available for initial database population Bulk Data Files · API Documentation · Scryfall Magic The Gathering Search
+Compliance: Must not paywall Scryfall data, and cannot crop/watermark card images REST API Documentation · Scryfall Magic The Gathering Search
+
+Discord UI Specifications (2024)
+Discord's current design uses Blurple (#5865F2) as primary color, with the main background being #323339 (darker blue-gray). The modern design emphasizes larger border radius and higher contrast. MobbinWhop Key design elements:
+
+Colors: Blurple #5865F2, Green #57F287, Red #ED4245, Yellow #FEE75C Discord Colors - Hex, RGB, CMYK and UIs
+Layout: Three-column structure with enhanced modern styling including lighter search bars and larger border radius Discord desktop design change: Take a look at the new Discord design
+
+Flutter Performance Strategy
+SQLite can efficiently handle 25,000+ records with proper optimization including WAL mode, background isolates for large queries, and batch operations wrapped in transactions. BlupPowerSync Critical optimizations:
+
+SQLite Setup: WAL mode by default, asynchronous transactions using connection pools SQLite Optimizations for Ultra High-Performance
+Performance: Bulk operations can be 50-100% faster with sqflite_common_ffi and noResult options Flutter - SQflite : Performance issues while bulk insertion - Stack Overflow
+
+State Management Recommendation (2024/2025)
+Riverpod is becoming the new standard for 2024/2025 with enhanced hot-reload and asynchronous support, while BLoC remains excellent for enterprise-level applications requiring structured solutions. MediumFlutterfever
+My Recommendation: BLoC for this project because:
+
+BLoC excels in enterprise-level apps with complex state management and team scalability MediumForesightmobile
+Better suited for the 15-week timeline with a structured team approach
+Enhanced DevTools for debugging and built-in analytics for state tracking in 2025 Best State Management for Flutter | Blog | Foresight Mobile
+More predictable for complex MTG game logic and real-time features
+
+Critical Questions Before We Begin
+
+Team Structure: Are you building this solo, or do you have a team? This affects our architecture decisions.
+Target Platforms: Mobile-first, or desktop/web as well? This impacts our layout strategy.
+Backend Strategy: Do you need user accounts, deck sharing, real-time multiplayer? This affects our Phase 4 planning.
+Performance Targets: What devices are you targeting as minimum specs?
+MTG Scope: Which formats are you prioritizing? (Standard, Modern, Commander, etc.)
+
+Proposed Architecture Refinements
+Based on research, I recommend these updates to your plan:
+Database Layer
+SQLite with:
+- WAL mode enabled
+- sqflite_common_ffi for performance
+- Background isolates for bulk operations
+- Optimized indexes for card search
+- Bulk Scryfall data sync strategy
+State Management
+BLoC Architecture:
+- Feature-based BLoCs (DeckBloc, CardBloc, SearchBloc)
+- Repository pattern with Either error handling
+- Clean architecture separation
+- Event-driven deck building logic
+UI System
+Discord Design System:
+- Exact color specifications (#5865F2, #323339)
+- Component library matching Discord patterns
+- Three-column responsive layout
+- Modern border radius and styling
+Let's Start Phase 1
