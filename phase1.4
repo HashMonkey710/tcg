@@ -1,0 +1,910 @@
+// Repository Pattern & BLoC Foundation for MTG Arena Clone
+
+// ===== 1. Core Error Handling =====
+
+// core/errors/failures.dart
+import 'package:equatable/equatable.dart';
+
+abstract class Failure extends Equatable {
+  final String message;
+  
+  const Failure(this.message);
+  
+  @override
+  List<Object> get props => [message];
+}
+
+class DatabaseFailure extends Failure {
+  const DatabaseFailure(super.message);
+}
+
+class NetworkFailure extends Failure {
+  const NetworkFailure(super.message);
+}
+
+class ServerFailure extends Failure {
+  const ServerFailure(super.message);
+}
+
+class CacheFailure extends Failure {
+  const CacheFailure(super.message);
+}
+
+class ValidationFailure extends Failure {
+  const ValidationFailure(super.message);
+}
+
+// core/errors/exceptions.dart
+class DatabaseException implements Exception {
+  final String message;
+  const DatabaseException(this.message);
+}
+
+class NetworkException implements Exception {
+  final String message;
+  const NetworkException(this.message);
+}
+
+class ServerException implements Exception {
+  final String message;
+  const ServerException(this.message);
+}
+
+class CacheException implements Exception {
+  final String message;
+  const CacheException(this.message);
+}
+
+// ===== 2. Repository Interfaces =====
+
+// features/cards/domain/repositories/card_repository.dart
+import 'package:dartz/dartz.dart';
+import '../entities/card.dart';
+import '../../../../core/errors/failures.dart';
+
+abstract class CardRepository {
+  Future<Either<Failure, List<Card>>> getCards({
+    int limit = 50,
+    int offset = 0,
+  });
+  
+  Future<Either<Failure, Card?>> getCardById(String id);
+  
+  Future<Either<Failure, List<Card>>> searchCards({
+    String? name,
+    List<String>? colors,
+    String? typeLine,
+    double? minCmc,
+    double? maxCmc,
+    String? setCode,
+    String? rarity,
+    int limit = 50,
+    int offset = 0,
+  });
+  
+  Future<Either<Failure, void>> syncCardsFromApi();
+  
+  Future<Either<Failure, void>> insertCards(List<Card> cards);
+  
+  Future<Either<Failure, void>> updateCard(Card card);
+  
+  Future<Either<Failure, void>> deleteCard(String id);
+  
+  Future<Either<Failure, int>> getCardCount();
+}
+
+// features/decks/domain/repositories/deck_repository.dart
+import 'package:dartz/dartz.dart';
+import '../entities/deck.dart';
+import '../entities/deck_card.dart';
+import '../../../../core/errors/failures.dart';
+
+abstract class DeckRepository {
+  Future<Either<Failure, List<Deck>>> getDecks();
+  
+  Future<Either<Failure, Deck?>> getDeckById(int id);
+  
+  Future<Either<Failure, Deck>> createDeck(Deck deck);
+  
+  Future<Either<Failure, Deck>> updateDeck(Deck deck);
+  
+  Future<Either<Failure, void>> deleteDeck(int id);
+  
+  Future<Either<Failure, void>> addCardToDeck(int deckId, DeckCard deckCard);
+  
+  Future<Either<Failure, void>> removeCardFromDeck(int deckId, String cardId, bool isSideboard);
+  
+  Future<Either<Failure, void>> updateCardQuantity(int deckId, String cardId, int quantity, bool isSideboard);
+  
+  Future<Either<Failure, List<DeckCard>>> getDeckCards(int deckId);
+}
+
+// ===== 3. Data Sources =====
+
+// features/cards/data/datasources/card_local_data_source.dart
+import '../models/card_model.dart';
+import '../../../../core/errors/exceptions.dart';
+import '../../../../shared/data/database/app_database.dart';
+import '../../../../shared/data/database/database_helper.dart';
+
+abstract class CardLocalDataSource {
+  Future<List<CardModel>> getCards({int limit = 50, int offset = 0});
+  Future<CardModel?> getCardById(String id);
+  Future<List<CardModel>> searchCards({
+    String? name,
+    List<String>? colors,
+    String? typeLine,
+    double? minCmc,
+    double? maxCmc,
+    String? setCode,
+    String? rarity,
+    int limit = 50,
+    int offset = 0,
+  });
+  Future<void> insertCards(List<CardModel> cards);
+  Future<void> updateCard(CardModel card);
+  Future<void> deleteCard(String id);
+  Future<int> getCardCount();
+}
+
+class CardLocalDataSourceImpl implements CardLocalDataSource {
+  final AppDatabase database;
+  
+  CardLocalDataSourceImpl({required this.database});
+  
+  @override
+  Future<List<CardModel>> getCards({int limit = 50, int offset = 0}) async {
+    try {
+      final db = await database.database;
+      final maps = await db.query(
+        'cards',
+        orderBy: 'name',
+        limit: limit,
+        offset: offset,
+      );
+      
+      return maps.map((map) => CardModel.fromDatabase(map)).toList();
+    } catch (e) {
+      throw DatabaseException('Failed to get cards: $e');
+    }
+  }
+  
+  @override
+  Future<CardModel?> getCardById(String id) async {
+    try {
+      final db = await database.database;
+      final maps = await db.query(
+        'cards',
+        where: 'id = ?',
+        whereArgs: [id],
+        limit: 1,
+      );
+      
+      if (maps.isEmpty) return null;
+      return CardModel.fromDatabase(maps.first);
+    } catch (e) {
+      throw DatabaseException('Failed to get card by id: $e');
+    }
+  }
+  
+  @override
+  Future<List<CardModel>> searchCards({
+    String? name,
+    List<String>? colors,
+    String? typeLine,
+    double? minCmc,
+    double? maxCmc,
+    String? setCode,
+    String? rarity,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    try {
+      final maps = await DatabaseHelper.searchCards(
+        name: name,
+        colors: colors,
+        typeLine: typeLine,
+        minCmc: minCmc,
+        maxCmc: maxCmc,
+        setCode: setCode,
+        rarity: rarity,
+        limit: limit,
+        offset: offset,
+      );
+      
+      return maps.map((map) => CardModel.fromDatabase(map)).toList();
+    } catch (e) {
+      throw DatabaseException('Failed to search cards: $e');
+    }
+  }
+  
+  @override
+  Future<void> insertCards(List<CardModel> cards) async {
+    try {
+      final cardMaps = cards.map((card) => card.toDatabase()).toList();
+      await DatabaseHelper.batchInsertCards(cardMaps);
+    } catch (e) {
+      throw DatabaseException('Failed to insert cards: $e');
+    }
+  }
+  
+  @override
+  Future<void> updateCard(CardModel card) async {
+    try {
+      final db = await database.database;
+      await db.update(
+        'cards',
+        card.toDatabase(),
+        where: 'id = ?',
+        whereArgs: [card.id],
+      );
+    } catch (e) {
+      throw DatabaseException('Failed to update card: $e');
+    }
+  }
+  
+  @override
+  Future<void> deleteCard(String id) async {
+    try {
+      final db = await database.database;
+      await db.delete(
+        'cards',
+        where: 'id = ?',
+        whereArgs: [id],
+      );
+    } catch (e) {
+      throw DatabaseException('Failed to delete card: $e');
+    }
+  }
+  
+  @override
+  Future<int> getCardCount() async {
+    try {
+      final db = await database.database;
+      return Sqflite.firstIntValue(
+        await db.rawQuery('SELECT COUNT(*) FROM cards')
+      ) ?? 0;
+    } catch (e) {
+      throw DatabaseException('Failed to get card count: $e');
+    }
+  }
+}
+
+// features/cards/data/datasources/card_remote_data_source.dart
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../models/card_model.dart';
+import '../../../../core/errors/exceptions.dart';
+import '../../../../core/constants/api_constants.dart';
+
+abstract class CardRemoteDataSource {
+  Future<List<CardModel>> getBulkCards();
+  Future<List<CardModel>> searchCards(String query);
+  Future<CardModel> getCardById(String id);
+}
+
+class CardRemoteDataSourceImpl implements CardRemoteDataSource {
+  final http.Client client;
+  
+  CardRemoteDataSourceImpl({required this.client});
+  
+  @override
+  Future<List<CardModel>> getBulkCards() async {
+    try {
+      // First get bulk data info
+      final bulkResponse = await client.get(
+        Uri.parse('${ApiConstants.scryfallBase}/bulk-data'),
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'MTGArenaClone/1.0',
+        },
+      );
+      
+      if (bulkResponse.statusCode != 200) {
+        throw ServerException('Failed to get bulk data info');
+      }
+      
+      final bulkData = jsonDecode(bulkResponse.body);
+      final defaultCardsUrl = bulkData['data']
+          .firstWhere((item) => item['type'] == 'default_cards')['download_uri'];
+      
+      // Download bulk cards data
+      final cardsResponse = await client.get(
+        Uri.parse(defaultCardsUrl),
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'MTGArenaClone/1.0',
+        },
+      );
+      
+      if (cardsResponse.statusCode != 200) {
+        throw ServerException('Failed to download bulk cards');
+      }
+      
+      final cardsJson = cardsResponse.body
+          .split('\n')
+          .where((line) => line.trim().isNotEmpty)
+          .map((line) => jsonDecode(line) as Map<String, dynamic>)
+          .toList();
+      
+      return cardsJson.map((json) => CardModel.fromJson(json)).toList();
+    } catch (e) {
+      if (e is ServerException) rethrow;
+      throw NetworkException('Failed to fetch bulk cards: $e');
+    }
+  }
+  
+  @override
+  Future<List<CardModel>> searchCards(String query) async {
+    try {
+      final response = await client.get(
+        Uri.parse('${ApiConstants.scryfallBase}/cards/search')
+            .replace(queryParameters: {'q': query}),
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'MTGArenaClone/1.0',
+        },
+      );
+      
+      if (response.statusCode == 404) {
+        return []; // No cards found
+      }
+      
+      if (response.statusCode != 200) {
+        throw ServerException('Failed to search cards');
+      }
+      
+      final data = jsonDecode(response.body);
+      final cardsJson = data['data'] as List<dynamic>;
+      
+      return cardsJson
+          .map((json) => CardModel.fromJson(json as Map<String, dynamic>))
+          .toList();
+    } catch (e) {
+      if (e is ServerException) rethrow;
+      throw NetworkException('Failed to search cards: $e');
+    }
+  }
+  
+  @override
+  Future<CardModel> getCardById(String id) async {
+    try {
+      final response = await client.get(
+        Uri.parse('${ApiConstants.scryfallBase}/cards/$id'),
+        headers: {
+          'Accept': 'application/json',
+          'User-Agent': 'MTGArenaClone/1.0',
+        },
+      );
+      
+      if (response.statusCode != 200) {
+        throw ServerException('Failed to get card by id');
+      }
+      
+      final json = jsonDecode(response.body) as Map<String, dynamic>;
+      return CardModel.fromJson(json);
+    } catch (e) {
+      if (e is ServerException) rethrow;
+      throw NetworkException('Failed to get card by id: $e');
+    }
+  }
+}
+
+// ===== 4. Repository Implementation =====
+
+// features/cards/data/repositories/card_repository_impl.dart
+import 'package:dartz/dartz.dart';
+import 'package:connectivity_plus/connectivity_plus.dart';
+import '../../domain/entities/card.dart';
+import '../../domain/repositories/card_repository.dart';
+import '../datasources/card_local_data_source.dart';
+import '../datasources/card_remote_data_source.dart';
+import '../../../../core/errors/failures.dart';
+import '../../../../core/errors/exceptions.dart';
+
+class CardRepositoryImpl implements CardRepository {
+  final CardLocalDataSource localDataSource;
+  final CardRemoteDataSource remoteDataSource;
+  final Connectivity connectivity;
+  
+  CardRepositoryImpl({
+    required this.localDataSource,
+    required this.remoteDataSource,
+    required this.connectivity,
+  });
+  
+  @override
+  Future<Either<Failure, List<Card>>> getCards({
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    try {
+      final cards = await localDataSource.getCards(limit: limit, offset: offset);
+      return Right(cards);
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+  
+  @override
+  Future<Either<Failure, Card?>> getCardById(String id) async {
+    try {
+      final card = await localDataSource.getCardById(id);
+      return Right(card);
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+  
+  @override
+  Future<Either<Failure, List<Card>>> searchCards({
+    String? name,
+    List<String>? colors,
+    String? typeLine,
+    double? minCmc,
+    double? maxCmc,
+    String? setCode,
+    String? rarity,
+    int limit = 50,
+    int offset = 0,
+  }) async {
+    try {
+      final cards = await localDataSource.searchCards(
+        name: name,
+        colors: colors,
+        typeLine: typeLine,
+        minCmc: minCmc,
+        maxCmc: maxCmc,
+        setCode: setCode,
+        rarity: rarity,
+        limit: limit,
+        offset: offset,
+      );
+      return Right(cards);
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+  
+  @override
+  Future<Either<Failure, void>> syncCardsFromApi() async {
+    try {
+      final connectivityResult = await connectivity.checkConnectivity();
+      if (connectivityResult == ConnectivityResult.none) {
+        return const Left(NetworkFailure('No internet connection'));
+      }
+      
+      final cards = await remoteDataSource.getBulkCards();
+      await localDataSource.insertCards(cards);
+      
+      return const Right(null);
+    } on NetworkException catch (e) {
+      return Left(NetworkFailure(e.message));
+    } on ServerException catch (e) {
+      return Left(ServerFailure(e.message));
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+  
+  @override
+  Future<Either<Failure, void>> insertCards(List<Card> cards) async {
+    try {
+      final cardModels = cards.map((card) => CardModel(
+        id: card.id,
+        oracleId: card.oracleId,
+        name: card.name,
+        manaCost: card.manaCost,
+        cmc: card.cmc,
+        typeLine: card.typeLine,
+        oracleText: card.oracleText,
+        power: card.power,
+        toughness: card.toughness,
+        colors: card.colors,
+        colorIdentity: card.colorIdentity,
+        keywords: card.keywords,
+        setCode: card.setCode,
+        setName: card.setName,
+        collectorNumber: card.collectorNumber,
+        rarity: card.rarity,
+        artist: card.artist,
+        imageUris: card.imageUris,
+        prices: card.prices,
+        legalities: card.legalities,
+        createdAt: card.createdAt,
+        updatedAt: card.updatedAt,
+      )).toList();
+      
+      await localDataSource.insertCards(cardModels);
+      return const Right(null);
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+  
+  @override
+  Future<Either<Failure, void>> updateCard(Card card) async {
+    try {
+      final cardModel = CardModel(
+        id: card.id,
+        oracleId: card.oracleId,
+        name: card.name,
+        manaCost: card.manaCost,
+        cmc: card.cmc,
+        typeLine: card.typeLine,
+        oracleText: card.oracleText,
+        power: card.power,
+        toughness: card.toughness,
+        colors: card.colors,
+        colorIdentity: card.colorIdentity,
+        keywords: card.keywords,
+        setCode: card.setCode,
+        setName: card.setName,
+        collectorNumber: card.collectorNumber,
+        rarity: card.rarity,
+        artist: card.artist,
+        imageUris: card.imageUris,
+        prices: card.prices,
+        legalities: card.legalities,
+        createdAt: card.createdAt,
+        updatedAt: card.updatedAt,
+      );
+      
+      await localDataSource.updateCard(cardModel);
+      return const Right(null);
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+  
+  @override
+  Future<Either<Failure, void>> deleteCard(String id) async {
+    try {
+      await localDataSource.deleteCard(id);
+      return const Right(null);
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+  
+  @override
+  Future<Either<Failure, int>> getCardCount() async {
+    try {
+      final count = await localDataSource.getCardCount();
+      return Right(count);
+    } on DatabaseException catch (e) {
+      return Left(DatabaseFailure(e.message));
+    }
+  }
+}
+
+// ===== 5. Use Cases =====
+
+// features/cards/domain/usecases/get_cards.dart
+import 'package:dartz/dartz.dart';
+import 'package:equatable/equatable.dart';
+import '../entities/card.dart';
+import '../repositories/card_repository.dart';
+import '../../../../core/errors/failures.dart';
+
+class GetCards {
+  final CardRepository repository;
+  
+  GetCards(this.repository);
+  
+  Future<Either<Failure, List<Card>>> call(GetCardsParams params) async {
+    return await repository.getCards(
+      limit: params.limit,
+      offset: params.offset,
+    );
+  }
+}
+
+class GetCardsParams extends Equatable {
+  final int limit;
+  final int offset;
+  
+  const GetCardsParams({
+    this.limit = 50,
+    this.offset = 0,
+  });
+  
+  @override
+  List<Object> get props => [limit, offset];
+}
+
+// features/cards/domain/usecases/search_cards.dart
+import 'package:dartz/dartz.dart';
+import 'package:equatable/equatable.dart';
+import '../entities/card.dart';
+import '../repositories/card_repository.dart';
+import '../../../../core/errors/failures.dart';
+
+class SearchCards {
+  final CardRepository repository;
+  
+  SearchCards(this.repository);
+  
+  Future<Either<Failure, List<Card>>> call(SearchCardsParams params) async {
+    return await repository.searchCards(
+      name: params.name,
+      colors: params.colors,
+      typeLine: params.typeLine,
+      minCmc: params.minCmc,
+      maxCmc: params.maxCmc,
+      setCode: params.setCode,
+      rarity: params.rarity,
+      limit: params.limit,
+      offset: params.offset,
+    );
+  }
+}
+
+class SearchCardsParams extends Equatable {
+  final String? name;
+  final List<String>? colors;
+  final String? typeLine;
+  final double? minCmc;
+  final double? maxCmc;
+  final String? setCode;
+  final String? rarity;
+  final int limit;
+  final int offset;
+  
+  const SearchCardsParams({
+    this.name,
+    this.colors,
+    this.typeLine,
+    this.minCmc,
+    this.maxCmc,
+    this.setCode,
+    this.rarity,
+    this.limit = 50,
+    this.offset = 0,
+  });
+  
+  @override
+  List<Object?> get props => [
+    name, colors, typeLine, minCmc, maxCmc, 
+    setCode, rarity, limit, offset,
+  ];
+}
+
+// features/cards/domain/usecases/sync_cards.dart
+import 'package:dartz/dartz.dart';
+import '../repositories/card_repository.dart';
+import '../../../../core/errors/failures.dart';
+
+class SyncCards {
+  final CardRepository repository;
+  
+  SyncCards(this.repository);
+  
+  Future<Either<Failure, void>> call() async {
+    return await repository.syncCardsFromApi();
+  }
+}
+
+// ===== 6. BLoC Events and States =====
+
+// features/cards/presentation/bloc/card_event.dart
+import 'package:equatable/equatable.dart';
+import '../../domain/usecases/get_cards.dart';
+import '../../domain/usecases/search_cards.dart';
+
+abstract class CardEvent extends Equatable {
+  const CardEvent();
+  
+  @override
+  List<Object?> get props => [];
+}
+
+class LoadCards extends CardEvent {
+  final GetCardsParams params;
+  
+  const LoadCards(this.params);
+  
+  @override
+  List<Object> get props => [params];
+}
+
+class SearchCardsEvent extends CardEvent {
+  final SearchCardsParams params;
+  
+  const SearchCardsEvent(this.params);
+  
+  @override
+  List<Object> get props => [params];
+}
+
+class SyncCardsEvent extends CardEvent {
+  const SyncCardsEvent();
+}
+
+class LoadMoreCards extends CardEvent {
+  const LoadMoreCards();
+}
+
+class RefreshCards extends CardEvent {
+  const RefreshCards();
+}
+
+// features/cards/presentation/bloc/card_state.dart
+import 'package:equatable/equatable.dart';
+import '../../domain/entities/card.dart';
+
+abstract class CardState extends Equatable {
+  const CardState();
+  
+  @override
+  List<Object?> get props => [];
+}
+
+class CardInitial extends CardState {
+  const CardInitial();
+}
+
+class CardLoading extends CardState {
+  const CardLoading();
+}
+
+class CardLoadMoreLoading extends CardState {
+  final List<Card> currentCards;
+  
+  const CardLoadMoreLoading(this.currentCards);
+  
+  @override
+  List<Object> get props => [currentCards];
+}
+
+class CardLoaded extends CardState {
+  final List<Card> cards;
+  final bool hasReachedMax;
+  final int currentOffset;
+  
+  const CardLoaded({
+    required this.cards,
+    this.hasReachedMax = false,
+    this.currentOffset = 0,
+  });
+  
+  @override
+  List<Object> get props => [cards, hasReachedMax, currentOffset];
+  
+  CardLoaded copyWith({
+    List<Card>? cards,
+    bool? hasReachedMax,
+    int? currentOffset,
+  }) {
+    return CardLoaded(
+      cards: cards ?? this.cards,
+      hasReachedMax: hasReachedMax ?? this.hasReachedMax,
+      currentOffset: currentOffset ?? this.currentOffset,
+    );
+  }
+}
+
+class CardError extends CardState {
+  final String message;
+  
+  const CardError(this.message);
+  
+  @override
+  List<Object> get props => [message];
+}
+
+class CardSyncing extends CardState {
+  const CardSyncing();
+}
+
+class CardSyncSuccess extends CardState {
+  const CardSyncSuccess();
+}
+
+// ===== 7. Main Card BLoC =====
+
+// features/cards/presentation/bloc/card_bloc.dart
+import 'package:flutter_bloc/flutter_bloc.dart';
+import '../../domain/usecases/get_cards.dart';
+import '../../domain/usecases/search_cards.dart';
+import '../../domain/usecases/sync_cards.dart';
+import 'card_event.dart';
+import 'card_state.dart';
+
+class CardBloc extends Bloc<CardEvent, CardState> {
+  final GetCards getCards;
+  final SearchCards searchCards;
+  final SyncCards syncCards;
+  
+  static const int _limit = 50;
+  
+  CardBloc({
+    required this.getCards,
+    required this.searchCards,
+    required this.syncCards,
+  }) : super(const CardInitial()) {
+    on<LoadCards>(_onLoadCards);
+    on<SearchCardsEvent>(_onSearchCards);
+    on<SyncCardsEvent>(_onSyncCards);
+    on<LoadMoreCards>(_onLoadMoreCards);
+    on<RefreshCards>(_onRefreshCards);
+  }
+  
+  Future<void> _onLoadCards(LoadCards event, Emitter<CardState> emit) async {
+    emit(const CardLoading());
+    
+    final result = await getCards(event.params);
+    
+    result.fold(
+      (failure) => emit(CardError(failure.message)),
+      (cards) => emit(CardLoaded(
+        cards: cards,
+        hasReachedMax: cards.length < _limit,
+        currentOffset: event.params.offset + cards.length,
+      )),
+    );
+  }
+  
+  Future<void> _onSearchCards(SearchCardsEvent event, Emitter<CardState> emit) async {
+    emit(const CardLoading());
+    
+    final result = await searchCards(event.params);
+    
+    result.fold(
+      (failure) => emit(CardError(failure.message)),
+      (cards) => emit(CardLoaded(
+        cards: cards,
+        hasReachedMax: cards.length < _limit,
+        currentOffset: event.params.offset + cards.length,
+      )),
+    );
+  }
+  
+  Future<void> _onSyncCards(SyncCardsEvent event, Emitter<CardState> emit) async {
+    emit(const CardSyncing());
+    
+    final result = await syncCards();
+    
+    result.fold(
+      (failure) => emit(CardError(failure.message)),
+      (_) => emit(const CardSyncSuccess()),
+    );
+  }
+  
+  Future<void> _onLoadMoreCards(LoadMoreCards event, Emitter<CardState> emit) async {
+    final currentState = state;
+    if (currentState is CardLoaded && !currentState.hasReachedMax) {
+      emit(CardLoadMoreLoading(currentState.cards));
+      
+      final result = await getCards(GetCardsParams(
+        limit: _limit,
+        offset: currentState.currentOffset,
+      ));
+      
+      result.fold(
+        (failure) => emit(CardError(failure.message)),
+        (newCards) => emit(currentState.copyWith(
+          cards: [...currentState.cards, ...newCards],
+          hasReachedMax: newCards.length < _limit,
+          currentOffset: currentState.currentOffset + newCards.length,
+        )),
+      );
+    }
+  }
+  
+  Future<void> _onRefreshCards(RefreshCards event, Emitter<CardState> emit) async {
+    add(const LoadCards(GetCardsParams(limit: _limit, offset: 0)));
+  }
+}
+
+This foundation provides:
+✅ **Clean Architecture**: Proper separation with repositories and use cases
+✅ **Error Handling**: Comprehensive Either pattern implementation
+✅ **BLoC Pattern**: Structured state management with events/states
+✅ **Performance**: Optimized for 25k+ cards with pagination
+✅ **Offline-First**: Local data source prioritized
+✅ **Type Safety**: Strong typing throughout
+✅ **Testability**: Abstractions for easy mocking
+✅ **Scalability**: Ready for complex MTG business logic
+
+Next: Discord UI theme and basic components.
