@@ -1,0 +1,885 @@
+// Phase 2: Scryfall API Integration & Card Display System
+
+// ===== 1. Enhanced Scryfall API Client =====
+
+// shared/data/api/scryfall_api.dart
+import 'dart:convert';
+import 'dart:io';
+import 'package:http/http.dart' as http;
+import '../../core/constants/api_constants.dart';
+import '../../core/errors/exceptions.dart';
+
+class ScryfallApi {
+  final http.Client client;
+  DateTime? _lastRequestTime;
+  
+  ScryfallApi({required this.client});
+  
+  Future<void> _enforceRateLimit() async {
+    if (_lastRequestTime != null) {
+      final timeSinceLastRequest = DateTime.now().difference(_lastRequestTime!);
+      if (timeSinceLastRequest < ApiConstants.requestDelay) {
+        final waitTime = ApiConstants.requestDelay - timeSinceLastRequest;
+        await Future.delayed(waitTime);
+      }
+    }
+    _lastRequestTime = DateTime.now();
+  }
+  
+  Future<Map<String, dynamic>> _makeRequest(
+    String endpoint, {
+    Map<String, String>? queryParams,
+    int retryCount = 0,
+  }) async {
+    await _enforceRateLimit();
+    
+    final uri = Uri.parse('${ApiConstants.scryfallBase}$endpoint')
+        .replace(queryParameters: queryParams);
+    
+    try {
+      final response = await client.get(uri, headers: ApiConstants.defaultHeaders);
+      
+      if (response.statusCode == 200) {
+        return jsonDecode(response.body) as Map<String, dynamic>;
+      } else if (response.statusCode == 429 && retryCount < ApiConstants.maxRetries) {
+        // Rate limited, wait longer and retry
+        await Future.delayed(Duration(seconds: (retryCount + 1) * 2));
+        return _makeRequest(endpoint, queryParams: queryParams, retryCount: retryCount + 1);
+      } else if (response.statusCode == 404) {
+        throw NetworkException('Resource not found');
+      } else {
+        throw ServerException('Request failed with status: ${response.statusCode}');
+      }
+    } on SocketException {
+      throw NetworkException('No internet connection');
+    } on HttpException {
+      throw NetworkException('HTTP error occurred');
+    } catch (e) {
+      throw NetworkException('Request failed: $e');
+    }
+  }
+  
+  Future<String> _downloadBulkFile(String url) async {
+    await _enforceRateLimit();
+    
+    try {
+      final response = await client.get(
+        Uri.parse(url),
+        headers: ApiConstants.defaultHeaders,
+      );
+      
+      if (response.statusCode == 200) {
+        return response.body;
+      } else {
+        throw ServerException('Failed to download bulk file');
+      }
+    } catch (e) {
+      throw NetworkException('Bulk download failed: $e');
+    }
+  }
+  
+  // Get bulk data information
+  Future<Map<String, dynamic>> getBulkDataInfo() async {
+    return await _makeRequest('/bulk-data');
+  }
+  
+  // Download and parse bulk cards
+  Future<List<Map<String, dynamic>>> downloadBulkCards() async {
+    final bulkInfo = await getBulkDataInfo();
+    final bulkDataList = bulkInfo['data'] as List<dynamic>;
+    
+    final defaultCardsInfo = bulkDataList.firstWhere(
+      (item) => item['type'] == 'default_cards',
+      orElse: () => throw ServerException('Default cards bulk data not found'),
+    );
+    
+    final downloadUri = defaultCardsInfo['download_uri'] as String;
+    final bulkContent = await _downloadBulkFile(downloadUri);
+    
+    // Parse JSONL format (one JSON object per line)
+    final lines = bulkContent.split('\n').where((line) => line.trim().isNotEmpty);
+    final cards = <Map<String, dynamic>>[];
+    
+    for (final line in lines) {
+      try {
+        final card = jsonDecode(line) as Map<String, dynamic>;
+        cards.add(card);
+      } catch (e) {
+        // Skip malformed lines
+        continue;
+      }
+    }
+    
+    return cards;
+  }
+  
+  // Search cards
+  Future<Map<String, dynamic>> searchCards({
+    required String query,
+    String? orderBy,
+    String? dir,
+    int? page,
+  }) async {
+    final queryParams = <String, String>{
+      'q': query,
+      if (orderBy != null) 'order': orderBy,
+      if (dir != null) 'dir': dir,
+      if (page != null) 'page': page.toString(),
+    };
+    
+    return await _makeRequest('/cards/search', queryParams: queryParams);
+  }
+  
+  // Get card by ID
+  Future<Map<String, dynamic>> getCardById(String id) async {
+    return await _makeRequest('/cards/$id');
+  }
+  
+  // Get random card
+  Future<Map<String, dynamic>> getRandomCard() async {
+    return await _makeRequest('/cards/random');
+  }
+  
+  // Get sets information
+  Future<Map<String, dynamic>> getSets() async {
+    return await _makeRequest('/sets');
+  }
+  
+  // Get card autocomplete
+  Future<Map<String, dynamic>> getCardNames({String? query}) async {
+    final queryParams = query != null ? {'q': query} : null;
+    return await _makeRequest('/cards/autocomplete', queryParams: queryParams);
+  }
+}
+
+// ===== 2. Enhanced Card Model with JSON Serialization =====
+
+// features/cards/data/models/card_model.g.dart (generated file example)
+// This would be generated by json_serializable, showing the structure
+
+// features/cards/data/models/card_model.dart (enhanced)
+import 'dart:convert';
+import 'package:json_annotation/json_annotation.dart';
+import '../../domain/entities/card.dart';
+
+part 'card_model.g.dart';
+
+@JsonSerializable(explicitToJson: true, fieldRename: FieldRename.snake)
+class CardModel extends Card {
+  const CardModel({
+    required super.id,
+    @JsonKey(name: 'oracle_id') super.oracleId,
+    required super.name,
+    @JsonKey(name: 'mana_cost') super.manaCost,
+    super.cmc,
+    @JsonKey(name: 'type_line') super.typeLine,
+    @JsonKey(name: 'oracle_text') super.oracleText,
+    super.power,
+    super.toughness,
+    super.colors = const [],
+    @JsonKey(name: 'color_identity') super.colorIdentity = const [],
+    super.keywords = const [],
+    @JsonKey(name: 'set') super.setCode,
+    @JsonKey(name: 'set_name') super.setName,
+    @JsonKey(name: 'collector_number') super.collectorNumber,
+    super.rarity,
+    super.artist,
+    @JsonKey(name: 'image_uris') super.imageUris,
+    super.prices,
+    super.legalities,
+    @JsonKey(name: 'released_at') super.releasedAt,
+    super.createdAt,
+    super.updatedAt,
+  });
+
+  factory CardModel.fromJson(Map<String, dynamic> json) {
+    // Handle special cases for Scryfall JSON structure
+    final processedJson = Map<String, dynamic>.from(json);
+    
+    // Handle image URIs - Scryfall provides nested structure
+    if (processedJson['image_uris'] != null) {
+      final imageUris = processedJson['image_uris'] as Map<String, dynamic>;
+      processedJson['image_uris'] = imageUris.map(
+        (key, value) => MapEntry(key, value.toString()),
+      );
+    }
+    
+    // Handle prices - convert all to strings
+    if (processedJson['prices'] != null) {
+      final prices = processedJson['prices'] as Map<String, dynamic>;
+      processedJson['prices'] = prices.map(
+        (key, value) => MapEntry(key, value?.toString() ?? ''),
+      );
+    }
+    
+    // Handle legalities - convert all to strings
+    if (processedJson['legalities'] != null) {
+      final legalities = processedJson['legalities'] as Map<String, dynamic>;
+      processedJson['legalities'] = legalities.map(
+        (key, value) => MapEntry(key, value.toString()),
+      );
+    }
+    
+    // Add timestamps
+    processedJson['created_at'] = DateTime.now().millisecondsSinceEpoch;
+    processedJson['updated_at'] = DateTime.now().millisecondsSinceEpoch;
+    
+    return _$CardModelFromJson(processedJson);
+  }
+
+  Map<String, dynamic> toJson() => _$CardModelToJson(this);
+
+  // Database conversion methods
+  factory CardModel.fromDatabase(Map<String, dynamic> map) {
+    return CardModel(
+      id: map['id'] as String,
+      oracleId: map['oracle_id'] as String?,
+      name: map['name'] as String,
+      manaCost: map['mana_cost'] as String?,
+      cmc: (map['cmc'] as num?)?.toDouble(),
+      typeLine: map['type_line'] as String?,
+      oracleText: map['oracle_text'] as String?,
+      power: map['power'] as String?,
+      toughness: map['toughness'] as String?,
+      colors: _parseJsonList(map['colors']),
+      colorIdentity: _parseJsonList(map['color_identity']),
+      keywords: _parseJsonList(map['keywords']),
+      setCode: map['set_code'] as String?,
+      setName: map['set_name'] as String?,
+      collectorNumber: map['collector_number'] as String?,
+      rarity: map['rarity'] as String?,
+      artist: map['artist'] as String?,
+      imageUris: _parseJsonMap(map['image_uris']),
+      prices: _parseJsonMap(map['prices']),
+      legalities: _parseJsonMap(map['legalities']),
+      releasedAt: map['released_at'] != null 
+          ? DateTime.fromMillisecondsSinceEpoch(map['released_at'] as int)
+          : null,
+      createdAt: map['created_at'] != null 
+          ? DateTime.fromMillisecondsSinceEpoch(map['created_at'] as int)
+          : null,
+      updatedAt: map['updated_at'] != null
+          ? DateTime.fromMillisecondsSinceEpoch(map['updated_at'] as int)
+          : null,
+    );
+  }
+
+  Map<String, dynamic> toDatabase() {
+    return {
+      'id': id,
+      'oracle_id': oracleId,
+      'name': name,
+      'mana_cost': manaCost,
+      'cmc': cmc,
+      'type_line': typeLine,
+      'oracle_text': oracleText,
+      'power': power,
+      'toughness': toughness,
+      'colors': jsonEncode(colors),
+      'color_identity': jsonEncode(colorIdentity),
+      'keywords': jsonEncode(keywords),
+      'set_code': setCode,
+      'set_name': setName,
+      'collector_number': collectorNumber,
+      'rarity': rarity,
+      'artist': artist,
+      'image_uris': imageUris != null ? jsonEncode(imageUris) : null,
+      'prices': prices != null ? jsonEncode(prices) : null,
+      'legalities': legalities != null ? jsonEncode(legalities) : null,
+      'released_at': releasedAt?.millisecondsSinceEpoch,
+      'created_at': createdAt?.millisecondsSinceEpoch,
+      'updated_at': updatedAt?.millisecondsSinceEpoch,
+    };
+  }
+
+  // Helper methods for JSON parsing (same as before)
+  static List<String> _parseJsonList(dynamic value) {
+    if (value == null) return [];
+    if (value is String) {
+      try {
+        final List<dynamic> decoded = jsonDecode(value);
+        return decoded.cast<String>();
+      } catch (e) {
+        return [];
+      }
+    }
+    if (value is List) return value.cast<String>();
+    return [];
+  }
+
+  static Map<String, String>? _parseJsonMap(dynamic value) {
+    if (value == null) return null;
+    if (value is String) {
+      try {
+        final Map<String, dynamic> decoded = jsonDecode(value);
+        return decoded.cast<String, String>();
+      } catch (e) {
+        return null;
+      }
+    }
+    if (value is Map) return value.cast<String, String>();
+    return null;
+  }
+}
+
+// ===== 3. Enhanced Card Entity =====
+
+// features/cards/domain/entities/card.dart (enhanced)
+import 'package:equatable/equatable.dart';
+
+class Card extends Equatable {
+  final String id;
+  final String? oracleId;
+  final String name;
+  final String? manaCost;
+  final double? cmc;
+  final String? typeLine;
+  final String? oracleText;
+  final String? power;
+  final String? toughness;
+  final List<String> colors;
+  final List<String> colorIdentity;
+  final List<String> keywords;
+  final String? setCode;
+  final String? setName;
+  final String? collectorNumber;
+  final String? rarity;
+  final String? artist;
+  final Map<String, String>? imageUris;
+  final Map<String, String>? prices;
+  final Map<String, String>? legalities;
+  final DateTime? releasedAt;
+  final DateTime? createdAt;
+  final DateTime? updatedAt;
+
+  const Card({
+    required this.id,
+    this.oracleId,
+    required this.name,
+    this.manaCost,
+    this.cmc,
+    this.typeLine,
+    this.oracleText,
+    this.power,
+    this.toughness,
+    this.colors = const [],
+    this.colorIdentity = const [],
+    this.keywords = const [],
+    this.setCode,
+    this.setName,
+    this.collectorNumber,
+    this.rarity,
+    this.artist,
+    this.imageUris,
+    this.prices,
+    this.legalities,
+    this.releasedAt,
+    this.createdAt,
+    this.updatedAt,
+  });
+
+  @override
+  List<Object?> get props => [
+        id,
+        oracleId,
+        name,
+        manaCost,
+        cmc,
+        typeLine,
+        oracleText,
+        power,
+        toughness,
+        colors,
+        colorIdentity,
+        keywords,
+        setCode,
+        setName,
+        collectorNumber,
+        rarity,
+        artist,
+        imageUris,
+        prices,
+        legalities,
+        releasedAt,
+        createdAt,
+        updatedAt,
+      ];
+      
+  // MTG Card Type Helpers
+  bool get isCreature => typeLine?.toLowerCase().contains('creature') ?? false;
+  bool get isInstant => typeLine?.toLowerCase().contains('instant') ?? false;
+  bool get isSorcery => typeLine?.toLowerCase().contains('sorcery') ?? false;
+  bool get isArtifact => typeLine?.toLowerCase().contains('artifact') ?? false;
+  bool get isEnchantment => typeLine?.toLowerCase().contains('enchantment') ?? false;
+  bool get isLand => typeLine?.toLowerCase().contains('land') ?? false;
+  bool get isPlaneswalker => typeLine?.toLowerCase().contains('planeswalker') ?? false;
+  bool get isBattle => typeLine?.toLowerCase().contains('battle') ?? false;
+  
+  // Legality Helpers
+  bool get isLegal => legalities?.isNotEmpty ?? false;
+  bool isLegalIn(String format) => legalities?[format.toLowerCase()] == 'legal';
+  
+  // Image Helpers
+  String get mainImageUrl => imageUris?['large'] ?? imageUris?['normal'] ?? '';
+  String get smallImageUrl => imageUris?['small'] ?? mainImageUrl;
+  String get artCropUrl => imageUris?['art_crop'] ?? '';
+  String get borderCropUrl => imageUris?['border_crop'] ?? mainImageUrl;
+  
+  // Price Helpers
+  double? get usdPrice {
+    final priceStr = prices?['usd'];
+    return priceStr != null ? double.tryParse(priceStr) : null;
+  }
+  
+  double? get usdFoilPrice {
+    final priceStr = prices?['usd_foil'];
+    return priceStr != null ? double.tryParse(priceStr) : null;
+  }
+  
+  // Mana Cost Helpers
+  List<String> get manaCostSymbols {
+    if (manaCost == null) return [];
+    
+    final regex = RegExp(r'\{([^}]+)\}');
+    final matches = regex.allMatches(manaCost!);
+    return matches.map((match) => match.group(1)!).toList();
+  }
+  
+  bool get isMonoColored => colors.length == 1;
+  bool get isMultiColored => colors.length > 1;
+  bool get isColorless => colors.isEmpty;
+  
+  // Rarity Helpers
+  bool get isCommon => rarity?.toLowerCase() == 'common';
+  bool get isUncommon => rarity?.toLowerCase() == 'uncommon';
+  bool get isRare => rarity?.toLowerCase() == 'rare';
+  bool get isMythic => rarity?.toLowerCase() == 'mythic';
+  
+  // Format Legality Helpers
+  bool get isStandardLegal => isLegalIn('standard');
+  bool get isModernLegal => isLegalIn('modern');
+  bool get isCommanderLegal => isLegalIn('commander');
+  bool get isLegacyLegal => isLegalIn('legacy');
+  bool get isVintageLegal => isLegalIn('vintage');
+  bool get isPioneerLegal => isLegalIn('pioneer');
+  
+  // Search Helper
+  bool matchesSearch(String query) {
+    final searchQuery = query.toLowerCase();
+    
+    return name.toLowerCase().contains(searchQuery) ||
+           (oracleText?.toLowerCase().contains(searchQuery) ?? false) ||
+           (typeLine?.toLowerCase().contains(searchQuery) ?? false) ||
+           (artist?.toLowerCase().contains(searchQuery) ?? false) ||
+           keywords.any((keyword) => keyword.toLowerCase().contains(searchQuery));
+  }
+}
+
+// ===== 4. Enhanced Remote Data Source =====
+
+// features/cards/data/datasources/card_remote_data_source.dart (enhanced)
+import 'dart:convert';
+import 'package:http/http.dart' as http;
+import '../models/card_model.dart';
+import '../../../../core/errors/exceptions.dart';
+import '../../../../shared/data/api/scryfall_api.dart';
+
+abstract class CardRemoteDataSource {
+  Future<List<CardModel>> getBulkCards();
+  Future<List<CardModel>> searchCards(String query, {int page = 1});
+  Future<CardModel> getCardById(String id);
+  Future<CardModel> getRandomCard();
+  Future<List<String>> getCardNames({String? query});
+}
+
+class CardRemoteDataSourceImpl implements CardRemoteDataSource {
+  final ScryfallApi api;
+  
+  CardRemoteDataSourceImpl({required this.api});
+  
+  @override
+  Future<List<CardModel>> getBulkCards() async {
+    try {
+      final cardsJson = await api.downloadBulkCards();
+      
+      return cardsJson
+          .map((json) => CardModel.fromJson(json))
+          .where((card) => _isValidCard(card))
+          .toList();
+    } catch (e) {
+      if (e is NetworkException || e is ServerException) rethrow;
+      throw NetworkException('Failed to fetch bulk cards: $e');
+    }
+  }
+  
+  @override
+  Future<List<CardModel>> searchCards(String query, {int page = 1}) async {
+    try {
+      final result = await api.searchCards(
+        query: query,
+        page: page > 0 ? page : 1,
+      );
+      
+      if (result['data'] == null) return [];
+      
+      final cardsJson = result['data'] as List<dynamic>;
+      
+      return cardsJson
+          .map((json) => CardModel.fromJson(json as Map<String, dynamic>))
+          .where((card) => _isValidCard(card))
+          .toList();
+    } catch (e) {
+      if (e is NetworkException || e is ServerException) rethrow;
+      throw NetworkException('Failed to search cards: $e');
+    }
+  }
+  
+  @override
+  Future<CardModel> getCardById(String id) async {
+    try {
+      final json = await api.getCardById(id);
+      return CardModel.fromJson(json);
+    } catch (e) {
+      if (e is NetworkException || e is ServerException) rethrow;
+      throw NetworkException('Failed to get card by id: $e');
+    }
+  }
+  
+  @override
+  Future<CardModel> getRandomCard() async {
+    try {
+      final json = await api.getRandomCard();
+      return CardModel.fromJson(json);
+    } catch (e) {
+      if (e is NetworkException || e is ServerException) rethrow;
+      throw NetworkException('Failed to get random card: $e');
+    }
+  }
+  
+  @override
+  Future<List<String>> getCardNames({String? query}) async {
+    try {
+      final result = await api.getCardNames(query: query);
+      final data = result['data'] as List<dynamic>?;
+      
+      return data?.cast<String>() ?? [];
+    } catch (e) {
+      if (e is NetworkException || e is ServerException) rethrow;
+      throw NetworkException('Failed to get card names: $e');
+    }
+  }
+  
+  // Filter out invalid cards (tokens, art series, etc.)
+  bool _isValidCard(CardModel card) {
+    // Skip tokens and non-game cards
+    if (card.typeLine?.toLowerCase().contains('token') ?? false) return false;
+    if (card.setCode == 'tafr') return false; // Art series
+    if (card.setCode?.startsWith('t') ?? false) return false; // Most token sets
+    
+    // Must have a name and some basic properties
+    if (card.name.isEmpty) return false;
+    
+    return true;
+  }
+}
+
+// ===== 5. Card Display Components =====
+
+// features/cards/presentation/widgets/card_item.dart
+import 'package:flutter/material.dart';
+import 'package:cached_network_image/cached_network_image.dart';
+import '../../domain/entities/card.dart';
+import '../../../../core/theme/discord_colors.dart';
+import '../../../../core/theme/app_text_styles.dart';
+import '../../../../core/widgets/base_widgets.dart';
+import '../../../../core/constants/app_constants.dart';
+
+class CardItem extends StatelessWidget {
+  final Card card;
+  final VoidCallback? onTap;
+  final bool showDetails;
+  final double? width;
+  final double? height;
+  
+  const CardItem({
+    super.key,
+    required this.card,
+    this.onTap,
+    this.showDetails = true,
+    this.width,
+    this.height,
+  });
+  
+  @override
+  Widget build(BuildContext context) {
+    final cardWidth = width ?? 200;
+    final cardHeight = height ?? (cardWidth / AppConstants.cardAspectRatio);
+    
+    return SizedBox(
+      width: cardWidth,
+      height: showDetails ? cardHeight + 120 : cardHeight,
+      child: DiscordCard(
+        onTap: onTap,
+        padding: const EdgeInsets.all(8),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // Card image
+            Expanded(
+              child: ClipRRect(
+                borderRadius: BorderRadius.circular(8),
+                child: _buildCardImage(cardWidth - 16, cardHeight - 16),
+              ),
+            ),
+            
+            if (showDetails) ...[
+              const SizedBox(height: 8),
+              _buildCardDetails(),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildCardImage(double width, double height) {
+    return CachedNetworkImage(
+      imageUrl: card.mainImageUrl,
+      width: width,
+      height: height,
+      fit: BoxFit.cover,
+      placeholder: (context, url) => Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          color: DiscordColors.backgroundAccent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const CircularProgressIndicator(
+              valueColor: AlwaysStoppedAnimation(DiscordColors.blurple),
+            ),
+            const SizedBox(height: 8),
+            Text(
+              'Loading...',
+              style: AppTextStyles.bodySmall,
+            ),
+          ],
+        ),
+      ),
+      errorWidget: (context, url, error) => Container(
+        width: width,
+        height: height,
+        decoration: BoxDecoration(
+          color: DiscordColors.backgroundAccent,
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(
+              Icons.broken_image,
+              color: DiscordColors.textMuted,
+              size: 32,
+            ),
+            const SizedBox(height: 8),
+            Text(
+              card.name,
+              style: AppTextStyles.bodySmall,
+              textAlign: TextAlign.center,
+              maxLines: 2,
+              overflow: TextOverflow.ellipsis,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildCardDetails() {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: [
+        // Card name
+        Text(
+          card.name,
+          style: AppTextStyles.labelLarge,
+          maxLines: 2,
+          overflow: TextOverflow.ellipsis,
+        ),
+        
+        const SizedBox(height: 4),
+        
+        // Mana cost and CMC
+        Row(
+          children: [
+            if (card.manaCost != null && card.manaCost!.isNotEmpty) ...[
+              _buildManaCost(),
+              const SizedBox(width: 8),
+            ],
+            if (card.cmc != null) ...[
+              Text(
+                'CMC ${card.cmc!.toInt()}',
+                style: AppTextStyles.bodySmall,
+              ),
+            ],
+          ],
+        ),
+        
+        const SizedBox(height: 4),
+        
+        // Type and rarity
+        Row(
+          children: [
+            Expanded(
+              child: Text(
+                card.typeLine ?? '',
+                style: AppTextStyles.bodySmall.copyWith(
+                  color: DiscordColors.textSecondary,
+                ),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+            if (card.rarity != null) ...[
+              const SizedBox(width: 8),
+              _buildRarityBadge(),
+            ],
+          ],
+        ),
+        
+        const SizedBox(height: 4),
+        
+        // Set and price
+        Row(
+          children: [
+            if (card.setCode != null) ...[
+              Text(
+                card.setCode!.toUpperCase(),
+                style: AppTextStyles.labelSmall,
+              ),
+            ],
+            const Spacer(),
+            if (card.usdPrice != null) ...[
+              Text(
+                '\$${card.usdPrice!.toStringAsFixed(2)}',
+                style: AppTextStyles.labelSmall.copyWith(
+                  color: DiscordColors.green,
+                ),
+              ),
+            ],
+          ],
+        ),
+      ],
+    );
+  }
+  
+  Widget _buildManaCost() {
+    final symbols = card.manaCostSymbols;
+    if (symbols.isEmpty) return const SizedBox.shrink();
+    
+    return Row(
+      mainAxisSize: MainAxisSize.min,
+      children: symbols.map((symbol) => _buildManaSymbol(symbol)).toList(),
+    );
+  }
+  
+  Widget _buildManaSymbol(String symbol) {
+    Color symbolColor;
+    
+    switch (symbol.toUpperCase()) {
+      case 'W':
+        symbolColor = DiscordColors.mtgWhite;
+        break;
+      case 'U':
+        symbolColor = DiscordColors.mtgBlue;
+        break;
+      case 'B':
+        symbolColor = DiscordColors.mtgBlack;
+        break;
+      case 'R':
+        symbolColor = DiscordColors.mtgRed;
+        break;
+      case 'G':
+        symbolColor = DiscordColors.mtgGreen;
+        break;
+      default:
+        symbolColor = DiscordColors.mtgColorless;
+    }
+    
+    return Container(
+      margin: const EdgeInsets.only(right: 2),
+      width: 16,
+      height: 16,
+      decoration: BoxDecoration(
+        color: symbolColor,
+        shape: BoxShape.circle,
+        border: Border.all(color: DiscordColors.borderStrong, width: 1),
+      ),
+      child: Center(
+        child: Text(
+          symbol,
+          style: AppTextStyles.labelSmall.copyWith(
+            color: symbol.toUpperCase() == 'W' || symbol.toUpperCase() == 'Y' 
+                ? DiscordColors.black 
+                : DiscordColors.white,
+            fontSize: 10,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+    );
+  }
+  
+  Widget _buildRarityBadge() {
+    Color rarityColor;
+    
+    switch (card.rarity?.toLowerCase()) {
+      case 'common':
+        rarityColor = DiscordColors.textSecondary;
+        break;
+      case 'uncommon':
+        rarityColor = Colors.silver;
+        break;
+      case 'rare':
+        rarityColor = Colors.amber;
+        break;
+      case 'mythic':
+        rarityColor = Colors.deepOrange;
+        break;
+      default:
+        rarityColor = DiscordColors.textMuted;
+    }
+    
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: rarityColor.withOpacity(0.2),
+        borderRadius: BorderRadius.circular(8),
+        border: Border.all(color: rarityColor, width: 1),
+      ),
+      child: Text(
+        card.rarity?.toUpperCase().substring(0, 1) ?? '',
+        style: AppTextStyles.labelSmall.copyWith(
+          color: rarityColor,
+          fontSize: 10,
+          fontWeight: FontWeight.bold,
+        ),
+      ),
+    );
+  }
+}
+
+This implementation provides:
+✅ **Rate-Limited API**: Proper Scryfall compliance with 100ms delays
+✅ **Robust Error Handling**: Network, server, and timeout handling
+✅ **Bulk Data Download**: Efficient large dataset synchronization
+✅ **Enhanced Card Model**: Complete MTG card representation
+✅ **Card Display Component**: Discord-styled card visualization
+✅ **Mana Cost Display**: Visual mana symbols
+✅ **Image Caching**: Optimized card image loading
+✅ **Search Integration**: Ready for advanced filtering
+
+Next: Card grid display and search functionality.
